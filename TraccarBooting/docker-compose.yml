@@ -1,0 +1,25 @@
+version: '3.9'
+
+networks:
+  microservices-net:
+    external: true
+
+services:
+  device-gateway-service:
+    build: .
+    container_name: device-gateway-service
+    networks:
+      - microservices-net
+    ports:
+      - "8081:8081"
+      - "5023:5023"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_CONSUMER_GROUP_ID: device-gateway-consumer-group
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      TCP_PORT: 5023
+      DEVICE_GATEWAY_SESSION_IDLE_TIMEOUT: 600
+      DEVICE_GATEWAY_SESSION_CLEANUP_INTERVAL: 60
+    restart: unless-stopped

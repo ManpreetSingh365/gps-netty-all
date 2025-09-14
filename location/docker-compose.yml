@@ -1,0 +1,18 @@
+version: '3.9'
+
+networks:
+  microservices-net:
+    external: true
+
+services:
+  location-service:
+    build: .
+    container_name: location-service
+    networks:
+      - microservices-net
+    ports:
+      - "8082:8082"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_CONSUMER_GROUP_ID: location-service-consumer-group
+    restart: unless-stopped

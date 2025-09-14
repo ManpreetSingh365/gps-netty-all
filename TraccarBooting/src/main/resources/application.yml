@@ -1,0 +1,62 @@
+server:
+  port: ${SERVER_PORT:8081}  # default 8081
+  address: 0.0.0.0           # bind to all interfaces
+
+spring:
+  application:
+    name: device-gateway-service
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    consumer:
+      group-id: device-gateway-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      properties:
+        allow.auto.create.topics: false
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+
+    listener:
+      ack-mode: MANUAL_IMMEDIATE
+
+  redis:
+    host: ${REDIS_HOST:redis}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+
+device-gateway:
+  tcp:
+    port: ${TCP_PORT:5023}
+    boss-threads: 1
+    worker-threads: 4
+
+  kafka:
+    topics:
+      device-sessions: device.sessions
+      device-location: location.device
+      telemetry-inbound: telemetry.inbound
+      commands-outbound: commands.outbound
+
+  session:
+    idle-timeout: ${DEVICE_GATEWAY_SESSION_IDLE_TIMEOUT:600}
+    cleanup-interval: ${DEVICE_GATEWAY_SESSION_CLEANUP_INTERVAL:60}
+
+logging:
+  level:
+    com.wheelseye.devicegateway: INFO
+    io.netty: WARN
+    org.springframework.kafka: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always

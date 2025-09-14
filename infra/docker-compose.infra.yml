@@ -1,0 +1,63 @@
+version: '3.9'
+
+networks:
+  microservices-net:
+    name: microservices-net
+    driver: bridge
+
+volumes:
+  kafka-data:
+  redis-data:
+
+services:
+  kafka:
+    image: confluentinc/cp-kafka:8.0.0
+    container_name: kafka
+    hostname: kafka
+    networks:
+      - microservices-net
+    ports:
+      - "9092:9092"   # external client access
+      - "9093:9093"   # inter-broker
+      - "9094:9094"   # controller
+    environment:
+      CLUSTER_ID: MqUdYjvqR4dlbL6zB2Dq8Q
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9093,CLIENT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9093,CLIENT://kafka:9092,CONTROLLER://kafka:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CLIENT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  redis:
+    image: redis:7.2
+    container_name: redis
+    networks:
+      - microservices-net
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    hostname: kafka-ui
+    networks:
+      - microservices-net
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=localCluster
+      - KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL=PLAINTEXT
+    depends_on:
+      - kafka
