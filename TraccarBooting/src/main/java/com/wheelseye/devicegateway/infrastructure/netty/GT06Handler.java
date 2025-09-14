@@ -107,7 +107,7 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
             logger.info("📥 RAW DATA RECEIVED from {}: {} bytes - {}",
                     remoteAddress, buffer.readableBytes(), hexDump);
 
-            MessageFrame frame = protocolParser.parseFrame(buffer);
+            MessageFrame frame = gt06ParsingMethods.parseFrame(buffer);
             if (frame == null) {
                 logger.warn("❌ Failed to parse frame from {}", remoteAddress);
                 return;
@@ -220,7 +220,7 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
             String loginHex = ByteBufUtil.hexDump(frame.getContent());
             logger.info("🔐 LOGIN frame content: {}", loginHex);
 
-            IMEI imei = protocolParser.extractIMEI(frame);
+            IMEI imei = gt06ParsingMethods.extractIMEI(frame);
             if (imei == null) {
                 logger.warn("❌ Failed to extract IMEI from login frame from {}", remoteAddress);
                 ctx.close();
@@ -260,7 +260,7 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
             logger.info("✅ Session authenticated and saved for IMEI: {} (Session ID: {}, Variant: {})",
                     imei.getValue(), session.getId(), session.getDeviceVariant());
 
-            ByteBuf ack = protocolParser.buildLoginAck(frame.getSerialNumber());
+            ByteBuf ack = gt06ParsingMethods.buildLoginAck(frame.getSerialNumber());
             ctx.writeAndFlush(ack).addListener(future -> {
                 if (future.isSuccess()) {
                     logger.info("✅ Login ACK sent to {} (IMEI: {})", remoteAddress, imei.getValue());
@@ -372,17 +372,18 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
             logger.info("📍 Processing location packet for IMEI: {}", imei);
 
             // Parse and display location immediately
-            Location location = protocolParser.parseLocation(frame);
+            Location location = gt06ParsingMethods.parseLocation(ctx, frame.getContent());
             
 
             if (location != null) {
                 // IMMEDIATE location display
                 var protoLocation =  LocationMapper.toProto(location);
                 if(protoLocation != null){
-//                    kafkaAdapter.sendMessage("location.device", sid, protoLocation.toByteArray());
+                   kafkaAdapter.sendMessage("location.device", sid, protoLocation.toByteArray());
                     logger.info("📍 Got location packet for IMEI: {}", imei);
                 }
-                logLocationDataEnhanced(location, imei, remoteAddress, frame.getProtocolNumber());
+                // logLocationDataEnhanced(location, imei, remoteAddress, frame.getProtocolNumber());
+                logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame.getProtocolNumber());
                 session.markLocationDataReceived();
             } else {
                 logger.warn("❌ Failed to parse location data for IMEI: {} - Raw data: {}",
@@ -425,7 +426,7 @@ private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String 
         int frameLen = content.readableBytes();
 
         // Parse all data sections
-        Map<String, Object> locationData = gt06ParsingMethods.parseLocationData(ctx, content);
+        Map<String, Object> locationData = gt06ParsingMethods.parseLocationData(content);
         Map<String, Object> deviceStatus = gt06ParsingMethods.parseDeviceStatus(content);
         Map<String, Object> ioData = gt06ParsingMethods.parseIOPorts(content);
         Map<String, Object> lbsData = gt06ParsingMethods.parseLBSData(content);
@@ -774,7 +775,7 @@ private int getInt(Map<String, Object> map, String key) {
      */
     private void sendGenericAck(ChannelHandlerContext ctx, MessageFrame frame) {
         try {
-            ByteBuf ack = protocolParser.buildGenericAck(frame.getProtocolNumber(), frame.getSerialNumber());
+            ByteBuf ack = gt06ParsingMethods.buildGenericAck(frame.getProtocolNumber(), frame.getSerialNumber());
 
             logger.debug("📤 Sending ACK for protocol 0x{:02X}, serial {}",
                     frame.getProtocolNumber(), frame.getSerialNumber());

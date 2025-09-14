@@ -8,7 +8,10 @@ import com.wheelseye.devicegateway.adapters.messaging.KafkaAdapter;
 import com.wheelseye.devicegateway.application.services.DeviceSessionService;
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.mappers.LocationMapper;
+import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
 import com.wheelseye.devicegateway.domain.valueobjects.Location;
+import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,133 +25,197 @@ import io.netty.channel.ChannelHandlerContext;
 @Component
 public class Gt06ParsingMethods {
 
-    private final KafkaAdapter kafkaAdapter;
+    
+    private static final int HEADER_78 = 0x7878;
+    private static final int HEADER_79 = 0x7979;
 
     @Autowired
     private DeviceSessionService sessionService;
 
     private static final Logger logger = LoggerFactory.getLogger(Gt06ParsingMethods.class);
 
-    public Gt06ParsingMethods(KafkaAdapter kafkaAdapter) {
-        this.kafkaAdapter = kafkaAdapter;
+   
+
+
+
+
+        public MessageFrame parseFrame(ByteBuf buffer) {
+        try {
+            if (buffer.readableBytes() < 5) {
+                logger.debug("Insufficient bytes for frame parsing: {}", buffer.readableBytes());
+                return null;
+            }
+
+            // Store original reader index
+            int originalIndex = buffer.readerIndex();
+
+            // Read header
+            int startBits = buffer.readUnsignedShort();
+            boolean isExtended = (startBits == HEADER_79);
+
+            // Read length
+            int length;
+            if (isExtended) {
+                if (buffer.readableBytes() < 2) {
+                    buffer.readerIndex(originalIndex);
+                    return null;
+                }
+                length = buffer.readUnsignedShort();
+            } else {
+                if (buffer.readableBytes() < 1) {
+                    buffer.readerIndex(originalIndex);
+                    return null;
+                }
+                length = buffer.readUnsignedByte();
+            }
+
+            // Validate length
+            if (length < 1 || length > 1000) {
+                logger.debug("Invalid data length: {}", length);
+                buffer.readerIndex(originalIndex);
+                return null;
+            }
+
+            // Check if we have enough data
+            int remainingForContent = length - 4; // length includes protocol, serial, and CRC
+            if (buffer.readableBytes() < remainingForContent + 4) { // +4 for serial(2) + crc(2)
+                buffer.readerIndex(originalIndex);
+                return null;
+            }
+
+            // Read protocol number
+            int protocolNumber = buffer.readUnsignedByte();
+
+            // Read content (remaining data except serial and CRC)
+            ByteBuf content = Unpooled.buffer();
+            int contentLength = remainingForContent - 1; // -1 for protocol number
+            if (contentLength > 0) {
+                content.writeBytes(buffer, contentLength);
+            }
+
+            // Read serial number
+            int serialNumber = buffer.readUnsignedShort();
+
+            // Read CRC
+            int crc = buffer.readUnsignedShort();
+
+            // Read stop bits (if available)
+            int stopBits = 0x0D0A; // Default
+            if (buffer.readableBytes() >= 2) {
+                stopBits = buffer.readUnsignedShort();
+            }
+
+            // Create hex dump for debugging
+            buffer.readerIndex(originalIndex);
+            String rawHex = "";
+            if (buffer.readableBytes() >= 8) {
+                byte[] hexBytes = new byte[Math.min(buffer.readableBytes(), 32)];
+                buffer.getBytes(buffer.readerIndex(), hexBytes);
+                rawHex = bytesToHex(hexBytes);
+            }
+
+            logger.debug("Parsed frame: startBits=0x{:04X}, length={}, protocol=0x{:02X}, serial={}, crc=0x{:04X}",
+                    startBits, length, protocolNumber, serialNumber, crc);
+
+            return new MessageFrame(startBits, length, protocolNumber, content, serialNumber, crc, stopBits, rawHex);
+
+        } catch (Exception e) {
+            logger.error("Error parsing GT06 frame: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+    public IMEI extractIMEI(MessageFrame frame) {
+        try {
+            ByteBuf content = frame.getContent();
+
+            if (content.readableBytes() < 8) {
+                logger.warn("Insufficient bytes for IMEI extraction: {}", content.readableBytes());
+                return null;
+            }
+
+            // Read 8 bytes for BCD-encoded IMEI
+            byte[] imeiBytes = new byte[8];
+            content.readBytes(imeiBytes);
+
+            // PROPER BCD DECODING
+            StringBuilder imei = new StringBuilder();
+            for (byte b : imeiBytes) {
+                // Each byte contains two BCD digits
+                int highNibble = (b >> 4) & 0x0F;
+                int lowNibble = b & 0x0F;
+
+                // Validate BCD digits (0-9)
+                if (highNibble > 9 || lowNibble > 9) {
+                    logger.warn("Invalid BCD digit in IMEI: high={}, low={}", highNibble, lowNibble);
+                    return null;
+                }
+
+                imei.append(highNibble).append(lowNibble);
+            }
+
+            // Process the decoded IMEI string
+            String imeiStr = imei.toString();
+            logger.debug("Raw BCD decoded IMEI: '{}' (length: {})", imeiStr, imeiStr.length());
+
+            // Handle leading zero (common in GT06 protocol)
+            if (imeiStr.startsWith("0") && imeiStr.length() == 16) {
+                imeiStr = imeiStr.substring(1);
+                logger.debug("Removed leading zero: '{}'", imeiStr);
+            }
+
+            // Validate final IMEI format
+            if (imeiStr.length() != 15) {
+                logger.warn("Invalid IMEI length after processing: {} (expected 15)", imeiStr.length());
+                return null;
+            }
+
+            if (!imeiStr.matches("\\d{15}")) {
+                logger.warn("IMEI contains non-digit characters: '{}'", imeiStr);
+                return null;
+            }
+
+            logger.info("Successfully extracted IMEI: {}", imeiStr);
+            return new IMEI(imeiStr);
+
+        } catch (Exception e) {
+            logger.error("Error extracting IMEI: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+    public ByteBuf buildGenericAck(int protocolNumber, int serialNumber) {
+        try {
+            ByteBuf response = Unpooled.buffer();
+
+            // Header (0x7878)
+            response.writeShort(HEADER_78);
+
+            // Length (5 bytes total content)
+            response.writeByte(0x05);
+
+            // Echo back the protocol number
+            response.writeByte(protocolNumber);
+
+            // Serial number (2 bytes)
+            response.writeShort(serialNumber);
+
+            // Calculate and write CRC16
+            int crc = calculateCRC16(response, 2, response.writerIndex() - 2);
+            response.writeShort(crc);
+
+            // Stop bits
+            response.writeByte(0x0D);
+            response.writeByte(0x0A);
+
+            logger.debug("Built generic ACK: protocol=0x{:02X}, serial={}, crc=0x{:04X}",
+                    protocolNumber, serialNumber, crc);
+            return response;
+
+        } catch (Exception e) {
+            logger.error("Error building generic ACK: {}", e.getMessage(), e);
+            return Unpooled.buffer();
+        }
     }
 
-    /**
-     * Parse GT06 location data from ByteBuf content
-     * Extracts GPS coordinates, timestamp, speed, course, and satellite info
-     */
-    // public Map<String, Object> parseLocationData(ByteBuf content) {
-    //     Map<String, Object> data = new HashMap<>();
-
-    //     try {
-    //         content.resetReaderIndex();
-
-    //         if (content.readableBytes() < 19) {
-    //             logger.debug("Insufficient data for location parsing: {} bytes", content.readableBytes());
-    //             return getDefaultLocationData();
-    //         }
-
-    //         // Parse DateTime (bytes 0-5)
-    //         int year = 2000 + content.readUnsignedByte();
-    //         int month = content.readUnsignedByte();
-    //         int day = content.readUnsignedByte();
-    //         int hour = content.readUnsignedByte();
-    //         int minute = content.readUnsignedByte();
-    //         int second = content.readUnsignedByte();
-
-    //         String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
-    //                 year, month, day, hour, minute, second);
-
-    //         // GPS info length and satellites (bytes 6-7)
-    //         int gpsLength = content.readUnsignedByte();
-    //         int satellites = content.readUnsignedByte();
-
-    //         // CRITICAL: Extract coordinates from correct positions (bytes 8-15)
-    //         // Based on successful analysis: coordinates at bytes [7-14] with scale
-    //         // 1800000.0
-    //         content.resetReaderIndex();
-    //         content.skipBytes(7); // Skip to coordinate start
-
-    //         long latRaw = content.readUnsignedInt();
-    //         long lonRaw = content.readUnsignedInt();
-
-    //         // Apply correct GT06 coordinate scaling
-    //         double latitude = latRaw / 1800000.0;
-    //         double longitude = lonRaw / 1800000.0;
-
-    //         // Extract speed and course (bytes 15-17)
-    //         int speed = 0;
-    //         int course = 0;
-    //         boolean gpsValid = false;
-
-    //         if (content.readableBytes() >= 3) {
-    //             speed = content.readUnsignedByte();
-    //             int courseStatus = content.readUnsignedShort();
-    //             course = courseStatus & 0x3FF; // Lower 10 bits
-
-    //             // Extract GPS status flags
-    //             gpsValid = ((courseStatus >> 12) & 0x01) == 1;
-    //             boolean south = ((courseStatus >> 10) & 0x01) == 1;
-    //             boolean west = ((courseStatus >> 11) & 0x01) == 1;
-
-    //             // Apply hemisphere corrections
-    //             if (south)
-    //                 latitude = -Math.abs(latitude);
-    //             else
-    //                 latitude = Math.abs(latitude);
-
-    //             if (west)
-    //                 longitude = -Math.abs(longitude);
-    //             else
-    //                 longitude = Math.abs(longitude);
-    //         }
-
-    //         // Calculate accuracy based on satellite count
-    //         double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
-
-    //         // Build location hex slice (first 16 bytes)
-    //         content.resetReaderIndex();
-    //         String locationHex = "";
-    //         if (content.readableBytes() >= 16) {
-    //             // byte[] locationBytes = new byte;
-    //             byte[] locationBytes = new byte[16];
-
-    //             content.readBytes(locationBytes);
-    //             locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(locationBytes));
-    //         }
-
-    //         // Populate data map
-    //         data.put("locationHex", locationHex);
-    //         data.put("deviceTime", deviceTime);
-    //         data.put("latitudeAbs", Math.abs(latitude));
-    //         data.put("latDirection", latitude >= 0 ? "N" : "S");
-    //         data.put("longitudeAbs", Math.abs(longitude));
-    //         data.put("lonDirection", longitude >= 0 ? "E" : "W");
-    //         data.put("latitude", latitude);
-    //         data.put("longitude", longitude);
-    //         data.put("speed", speed);
-    //         data.put("heading", course);
-    //         data.put("satellites", satellites);
-    //         data.put("altitude", 0.0); // GT06 basic doesn't provide altitude
-    //         data.put("accuracy", accuracy);
-    //         data.put("hdop", satellites > 4 ? 1.0 : 2.5);
-    //         data.put("pdop", satellites > 4 ? 1.2 : 3.0);
-    //         data.put("vdop", satellites > 4 ? 0.9 : 2.0);
-    //         data.put("fixType", satellites >= 4 ? "3D Fix" : satellites >= 3 ? "2D Fix" : "No Fix");
-    //         data.put("serial", content.readableBytes() > 0 ? content.getByte(content.readerIndex()) & 0xFF : 0);
-    //         data.put("gpsValid", gpsValid);
-    //         data.put("gpsMode", "Auto");
-
-    //         logger.debug("Parsed location: lat={:.6f}, lon={:.6f}, speed={}km/h, sats={}",
-    //                 latitude, longitude, speed, satellites);
-
-    //         return data;
-
-    //     } catch (Exception e) {
-    //         logger.error("Error parsing location data: {}", e.getMessage(), e);
-    //         return getDefaultLocationData();
-    //     }
-    // }
 
 
     private Optional<DeviceSession> getAuthenticatedSession(ChannelHandlerContext ctx) {
@@ -175,119 +242,238 @@ public class Gt06ParsingMethods {
         }
     }
 
+    public ByteBuf buildLoginAck(int serialNumber) {
+        try {
+            ByteBuf response = Unpooled.buffer();
 
-public Map<String, Object> parseLocationData(ChannelHandlerContext ctx, ByteBuf content) {
-    Map<String, Object> data = new HashMap<>();
-    Location location = null;
-    String remoteAddress = ctx.channel().remoteAddress().toString();
-    Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
+            // Header (0x7878)
+            response.writeShort(HEADER_78);
 
-    if (sessionOpt.isEmpty()) {
-        logger.warn("❌ No authenticated session for location from {}", remoteAddress);
-        return null;
+            // Length (5 bytes total content)
+            response.writeByte(0x05);
+
+            // Protocol number (0x01 for login ACK)
+            response.writeByte(0x01);
+
+            // Serial number (2 bytes)
+            response.writeShort(serialNumber);
+
+            // Calculate and write CRC16
+            int crc = calculateCRC16(response, 2, response.writerIndex() - 2);
+            response.writeShort(crc);
+
+            // Stop bits
+            response.writeByte(0x0D);
+            response.writeByte(0x0A);
+
+            logger.debug("Built login ACK: serial={}, crc=0x{:04X}", serialNumber, crc);
+            return response;
+
+        } catch (Exception e) {
+            logger.error("Error building login ACK: {}", e.getMessage(), e);
+            return Unpooled.buffer();
+        }
     }
-    try {
-        content.markReaderIndex(); // mark start position
+    private int calculateCRC16(ByteBuf buffer, int offset, int length) {
+        int crc = 0xFFFF;
 
-        if (content.readableBytes() < 18) {
-            logger.warn("Insufficient bytes for location data: {}", content.readableBytes());
+        for (int i = offset; i < offset + length; i++) {
+            int data = buffer.getByte(i) & 0xFF;
+            crc ^= data;
+
+            for (int j = 0; j < 8; j++) {
+                if ((crc & 0x0001) != 0) {
+                    crc = (crc >> 1) ^ 0x8408;
+                } else {
+                    crc >>= 1;
+                }
+            }
+        }
+
+        return (~crc) & 0xFFFF;
+    }
+
+
+
+
+    public Map<String, Object> parseLocationData( ByteBuf content) {
+        Map<String, Object> data = new HashMap<>();
+    
+        try {
+            content.markReaderIndex(); // mark start position
+
+            if (content.readableBytes() < 18) {
+                logger.warn("Insufficient bytes for location data: {}", content.readableBytes());
+                return getDefaultLocationData();
+            }
+
+            // ---- Parse Date & Time (first 6 bytes) ----
+            int year = 2000 + content.readUnsignedByte();
+            int month = content.readUnsignedByte();
+            int day = content.readUnsignedByte();
+            int hour = content.readUnsignedByte();
+            int minute = content.readUnsignedByte();
+            int second = content.readUnsignedByte();
+
+            String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
+                    year, month, day, hour, minute, second);
+
+            // ---- Parse Satellites byte ----
+            int satellites = content.readUnsignedByte();
+
+            // ---- Parse Latitude & Longitude ----
+            long latRaw = content.readUnsignedInt();
+            long lonRaw = content.readUnsignedInt();
+
+            double latitude = latRaw / 1800000.0;
+            double longitude = lonRaw / 1800000.0;
+
+            // ---- Parse Speed & Course ----
+            double speed = content.readUnsignedByte();
+            int courseStatus = content.readUnsignedShort();
+            int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
+
+            boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
+            boolean west = ((courseStatus >> 10) & 0x01) == 1;   // Correct bit mapping
+            boolean south = ((courseStatus >> 11) & 0x01) == 1;
+
+            if (south) latitude = -latitude;
+            if (west) longitude = -longitude;
+
+            // ---- India-specific correction ----
+            // India is always North/East, so flip if out of India bounds
+            if (latitude < 6 || latitude > 37) latitude = Math.abs(latitude);
+            if (longitude < 68 || longitude > 97) longitude = Math.abs(longitude);
+
+            // ---- Compute Accuracy ----
+            double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
+
+            // ---- Collect Raw Hex for Debugging ----
+            content.resetReaderIndex();
+            byte[] rawBytes = new byte[Math.min(content.readableBytes(), 16)];
+            content.readBytes(rawBytes);
+            String locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(rawBytes));
+
+            // ---- Populate Map ----
+            data.put("locationHex", locationHex);
+            data.put("deviceTime", deviceTime);
+            data.put("latitude", latitude);
+            data.put("longitude", longitude);
+            data.put("latitudeAbs", Math.abs(latitude));
+            data.put("longitudeAbs", Math.abs(longitude));
+            data.put("latDirection", latitude >= 0 ? "N" : "S");
+            data.put("lonDirection", longitude >= 0 ? "E" : "W");
+            data.put("speed", speed);
+            data.put("heading", heading);
+            data.put("satellites", satellites);
+            data.put("gpsValid", gpsValid);
+            data.put("accuracy", accuracy);
+            data.put("altitude", 0.0);
+            data.put("fixType", satellites >= 4 ? "3D Fix" : satellites >= 3 ? "2D Fix" : "No Fix");
+
+            logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
+                    latitude, longitude, speed, satellites, gpsValid);
+
+            return data;
+
+        } catch (Exception e) {
+            logger.error("Error parsing GT06 location: {}", e.getMessage(), e);
             return getDefaultLocationData();
         }
+    }
 
-        // ---- Parse Date & Time (first 6 bytes) ----
-        int year = 2000 + content.readUnsignedByte();
-        int month = content.readUnsignedByte();
-        int day = content.readUnsignedByte();
-        int hour = content.readUnsignedByte();
-        int minute = content.readUnsignedByte();
-        int second = content.readUnsignedByte();
+    public Location parseLocation(ChannelHandlerContext ctx, ByteBuf content) {
+        Location location = null;
+        String remoteAddress = ctx.channel().remoteAddress().toString();
+        Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
 
-        String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
-                year, month, day, hour, minute, second);
-
-        // ---- Parse Satellites byte ----
-        int satellites = content.readUnsignedByte();
-
-        // ---- Parse Latitude & Longitude ----
-        long latRaw = content.readUnsignedInt();
-        long lonRaw = content.readUnsignedInt();
-
-        double latitude = latRaw / 1800000.0;
-        double longitude = lonRaw / 1800000.0;
-
-        // ---- Parse Speed & Course ----
-        double speed = content.readUnsignedByte();
-        int courseStatus = content.readUnsignedShort();
-        int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
-
-        boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
-        boolean west = ((courseStatus >> 10) & 0x01) == 1;   // Correct bit mapping
-        boolean south = ((courseStatus >> 11) & 0x01) == 1;
-
-        if (south) latitude = -latitude;
-        if (west) longitude = -longitude;
-
-        // ---- India-specific correction ----
-        // India is always North/East, so flip if out of India bounds
-        if (latitude < 6 || latitude > 37) latitude = Math.abs(latitude);
-        if (longitude < 68 || longitude > 97) longitude = Math.abs(longitude);
-
-        // ---- Compute Accuracy ----
-        double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
-
-        // ---- Collect Raw Hex for Debugging ----
-        content.resetReaderIndex();
-        byte[] rawBytes = new byte[Math.min(content.readableBytes(), 16)];
-        content.readBytes(rawBytes);
-        String locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(rawBytes));
-        DeviceSession session = sessionOpt.get();
-        String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
-
-        String sid = session.getId() != null ? session.getId() : "unknown-id";
-        logger.info("📍 Processing location packet for IMEI: {}", imei);
-        location = new Location(
-                latitude,
-                longitude,
-                0.0,              // Altitude default
-                speed,
-                heading,
-                satellites,
-                gpsValid,
-                deviceTime        // Timestamp string
-        );
-
-        var protoLocation =  LocationMapper.toProto(location);
-        if(protoLocation != null){
-            kafkaAdapter.sendMessage("location.device", sid, protoLocation.toByteArray());
+        if (sessionOpt.isEmpty()) {
+            logger.warn("❌ No authenticated session for location from {}", remoteAddress);
+            return null;
         }
 
-        // ---- Populate Map ----
-        data.put("locationHex", locationHex);
-        data.put("deviceTime", deviceTime);
-        data.put("latitude", latitude);
-        data.put("longitude", longitude);
-        data.put("latitudeAbs", Math.abs(latitude));
-        data.put("longitudeAbs", Math.abs(longitude));
-        data.put("latDirection", latitude >= 0 ? "N" : "S");
-        data.put("lonDirection", longitude >= 0 ? "E" : "W");
-        data.put("speed", speed);
-        data.put("heading", heading);
-        data.put("satellites", satellites);
-        data.put("gpsValid", gpsValid);
-        data.put("accuracy", accuracy);
-        data.put("altitude", 0.0);
-        data.put("fixType", satellites >= 4 ? "3D Fix" : satellites >= 3 ? "2D Fix" : "No Fix");
+        try {
+            content.markReaderIndex(); // mark start position
 
-        logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
-                latitude, longitude, speed, satellites, gpsValid);
+            if (content.readableBytes() < 18) {
+                logger.warn("Insufficient bytes for location data: {}", content.readableBytes());
+                return null; // No location object to return
+            }
 
-        return data;
+            // ---- Parse Date & Time (first 6 bytes) ----
+            int year = 2000 + content.readUnsignedByte();
+            int month = content.readUnsignedByte();
+            int day = content.readUnsignedByte();
+            int hour = content.readUnsignedByte();
+            int minute = content.readUnsignedByte();
+            int second = content.readUnsignedByte();
 
-    } catch (Exception e) {
-        logger.error("Error parsing GT06 location: {}", e.getMessage(), e);
-        return getDefaultLocationData();
+            String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
+                    year, month, day, hour, minute, second);
+
+            // ---- Parse Satellites byte ----
+            int satellites = content.readUnsignedByte();
+
+            // ---- Parse Latitude & Longitude ----
+            long latRaw = content.readUnsignedInt();
+            long lonRaw = content.readUnsignedInt();
+
+            double latitude = latRaw / 1800000.0;
+            double longitude = lonRaw / 1800000.0;
+
+            // ---- Parse Speed & Course ----
+            double speed = content.readUnsignedByte();
+            int courseStatus = content.readUnsignedShort();
+            int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
+
+            boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
+            boolean west = ((courseStatus >> 10) & 0x01) == 1;
+            boolean south = ((courseStatus >> 11) & 0x01) == 1;
+
+            if (south) latitude = -latitude;
+            if (west) longitude = -longitude;
+
+            // ---- India-specific correction ----
+            if (latitude < 6 || latitude > 37) latitude = Math.abs(latitude);
+            if (longitude < 68 || longitude > 97) longitude = Math.abs(longitude);
+
+            // ---- Compute Accuracy ----
+            double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
+
+            // ---- Collect Raw Hex for Debugging ----
+            content.resetReaderIndex();
+            byte[] rawBytes = new byte[Math.min(content.readableBytes(), 16)];
+            content.readBytes(rawBytes);
+            String locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(rawBytes));
+            DeviceSession session = sessionOpt.get();
+            String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
+
+            String sid = session.getId() != null ? session.getId() : "unknown-id";
+            logger.info("📍 Processing location packet for IMEI: {}", imei);
+
+            // ---- Build Location ----
+            location = new Location(
+                    latitude,
+                    longitude,
+                    0.0,          // Altitude default
+                    speed,
+                    heading,
+                    satellites,
+                    gpsValid,
+                    deviceTime    // Timestamp string
+            );
+
+            logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
+                    latitude, longitude, speed, satellites, gpsValid);
+
+            return location;
+
+        } catch (Exception e) {
+            logger.error("Error parsing GT06 location: {}", e.getMessage(), e);
+            return null;
+        }
     }
-}
+
 
 
     /**
@@ -824,5 +1010,14 @@ public Map<String, Object> parseLocationData(ChannelHandlerContext ctx, ByteBuf 
         }
         return "Unknown";
     }
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder result = new StringBuilder();
+        for (byte b : bytes) {
+            result.append(String.format("%02x", b));
+        }
+        return result.toString();
+    }
+    
+
 
 }
