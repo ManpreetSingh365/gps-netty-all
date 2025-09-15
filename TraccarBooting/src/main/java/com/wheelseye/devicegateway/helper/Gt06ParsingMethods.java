@@ -1,16 +1,16 @@
-package com.wheelseye.devicegateway.infrastructure.helper;
+package com.wheelseye.devicegateway.helper;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
-import com.wheelseye.devicegateway.adapters.messaging.KafkaAdapter;
-import com.wheelseye.devicegateway.application.services.DeviceSessionService;
+import com.wheelseye.devicegateway.config.KafkaAdapter;
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.mappers.LocationMapper;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
 import com.wheelseye.devicegateway.domain.valueobjects.Location;
 import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
+import com.wheelseye.devicegateway.service.DeviceSessionService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,7 +25,6 @@ import io.netty.channel.ChannelHandlerContext;
 @Component
 public class Gt06ParsingMethods {
 
-    
     private static final int HEADER_78 = 0x7878;
     private static final int HEADER_79 = 0x7979;
 
@@ -34,12 +33,7 @@ public class Gt06ParsingMethods {
 
     private static final Logger logger = LoggerFactory.getLogger(Gt06ParsingMethods.class);
 
-   
-
-
-
-
-        public MessageFrame parseFrame(ByteBuf buffer) {
+    public MessageFrame parseFrame(ByteBuf buffer) {
         try {
             if (buffer.readableBytes() < 5) {
                 logger.debug("Insufficient bytes for frame parsing: {}", buffer.readableBytes());
@@ -124,6 +118,7 @@ public class Gt06ParsingMethods {
             return null;
         }
     }
+
     public IMEI extractIMEI(MessageFrame frame) {
         try {
             ByteBuf content = frame.getContent();
@@ -182,6 +177,7 @@ public class Gt06ParsingMethods {
             return null;
         }
     }
+
     public ByteBuf buildGenericAck(int protocolNumber, int serialNumber) {
         try {
             ByteBuf response = Unpooled.buffer();
@@ -215,8 +211,6 @@ public class Gt06ParsingMethods {
             return Unpooled.buffer();
         }
     }
-
-
 
     private Optional<DeviceSession> getAuthenticatedSession(ChannelHandlerContext ctx) {
         try {
@@ -274,6 +268,7 @@ public class Gt06ParsingMethods {
             return Unpooled.buffer();
         }
     }
+
     private int calculateCRC16(ByteBuf buffer, int offset, int length) {
         int crc = 0xFFFF;
 
@@ -293,12 +288,9 @@ public class Gt06ParsingMethods {
         return (~crc) & 0xFFFF;
     }
 
-
-
-
-    public Map<String, Object> parseLocationData( ByteBuf content) {
+    public Map<String, Object> parseLocationData(ByteBuf content) {
         Map<String, Object> data = new HashMap<>();
-    
+
         try {
             content.markReaderIndex(); // mark start position
 
@@ -334,16 +326,20 @@ public class Gt06ParsingMethods {
             int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
 
             boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
-            boolean west = ((courseStatus >> 10) & 0x01) == 1;   // Correct bit mapping
+            boolean west = ((courseStatus >> 10) & 0x01) == 1; // Correct bit mapping
             boolean south = ((courseStatus >> 11) & 0x01) == 1;
 
-            if (south) latitude = -latitude;
-            if (west) longitude = -longitude;
+            if (south)
+                latitude = -latitude;
+            if (west)
+                longitude = -longitude;
 
             // ---- India-specific correction ----
             // India is always North/East, so flip if out of India bounds
-            if (latitude < 6 || latitude > 37) latitude = Math.abs(latitude);
-            if (longitude < 68 || longitude > 97) longitude = Math.abs(longitude);
+            if (latitude < 6 || latitude > 37)
+                latitude = Math.abs(latitude);
+            if (longitude < 68 || longitude > 97)
+                longitude = Math.abs(longitude);
 
             // ---- Compute Accuracy ----
             double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
@@ -430,12 +426,16 @@ public class Gt06ParsingMethods {
             boolean west = ((courseStatus >> 10) & 0x01) == 1;
             boolean south = ((courseStatus >> 11) & 0x01) == 1;
 
-            if (south) latitude = -latitude;
-            if (west) longitude = -longitude;
+            if (south)
+                latitude = -latitude;
+            if (west)
+                longitude = -longitude;
 
             // ---- India-specific correction ----
-            if (latitude < 6 || latitude > 37) latitude = Math.abs(latitude);
-            if (longitude < 68 || longitude > 97) longitude = Math.abs(longitude);
+            if (latitude < 6 || latitude > 37)
+                latitude = Math.abs(latitude);
+            if (longitude < 68 || longitude > 97)
+                longitude = Math.abs(longitude);
 
             // ---- Compute Accuracy ----
             double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
@@ -455,12 +455,12 @@ public class Gt06ParsingMethods {
             location = new Location(
                     latitude,
                     longitude,
-                    0.0,          // Altitude default
+                    0.0, // Altitude default
                     speed,
                     heading,
                     satellites,
                     gpsValid,
-                    deviceTime    // Timestamp string
+                    deviceTime // Timestamp string
             );
 
             logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
@@ -473,8 +473,6 @@ public class Gt06ParsingMethods {
             return null;
         }
     }
-
-
 
     /**
      * Parse GT06 device status from ByteBuf content
@@ -1010,6 +1008,7 @@ public class Gt06ParsingMethods {
         }
         return "Unknown";
     }
+
     private String bytesToHex(byte[] bytes) {
         StringBuilder result = new StringBuilder();
         for (byte b : bytes) {
@@ -1017,7 +1016,5 @@ public class Gt06ParsingMethods {
         }
         return result.toString();
     }
-    
-
 
 }

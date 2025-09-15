@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.infrastructure.persistence;
+package com.wheelseye.devicegateway.repository;
 
 import java.time.Instant;
 import java.util.*;

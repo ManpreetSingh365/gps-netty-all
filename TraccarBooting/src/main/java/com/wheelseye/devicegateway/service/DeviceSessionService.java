@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.application.services;
+package com.wheelseye.devicegateway.service;
 
 import java.util.List;
 import java.util.Optional;
@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
-import com.wheelseye.devicegateway.infrastructure.persistence.RedisSessionRepository;
+import com.wheelseye.devicegateway.repository.RedisSessionRepository;
 
 import io.netty.channel.Channel;
 

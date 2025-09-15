@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.adapters.web;
+package com.wheelseye.devicegateway.controller;
 
 import java.util.Collection;
 import java.util.HashMap;
@@ -12,10 +12,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.wheelseye.devicegateway.adapters.web.dto.DeviceSessionDto;
-import com.wheelseye.devicegateway.application.services.DeviceSessionService;
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
+import com.wheelseye.devicegateway.dto.DeviceSessionDto;
+import com.wheelseye.devicegateway.service.DeviceSessionService;
 
 @RestController
 @RequestMapping("/api/v1/devices")

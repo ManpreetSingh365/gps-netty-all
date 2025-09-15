@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.application.ports;
+package com.wheelseye.devicegateway.messaging;
 
 import com.wheelseye.devicegateway.domain.events.DeviceSessionEvent;
 import com.wheelseye.devicegateway.domain.events.TelemetryEvent;

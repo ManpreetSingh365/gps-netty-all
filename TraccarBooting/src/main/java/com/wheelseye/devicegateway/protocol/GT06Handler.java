@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.infrastructure.netty;
+package com.wheelseye.devicegateway.protocol;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -10,14 +10,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import com.wheelseye.devicegateway.adapters.messaging.KafkaAdapter;
-import com.wheelseye.devicegateway.application.services.DeviceSessionService;
-import com.wheelseye.devicegateway.application.services.TelemetryProcessingService;
+import com.wheelseye.devicegateway.config.KafkaAdapter;
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
 import com.wheelseye.devicegateway.domain.valueobjects.Location;
 import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
-import com.wheelseye.devicegateway.infrastructure.helper.Gt06ParsingMethods;
+import com.wheelseye.devicegateway.helper.Gt06ParsingMethods;
+import com.wheelseye.devicegateway.service.DeviceSessionService;
+// import com.wheelseye.devicegateway.service.TelemetryProcessingService;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -53,8 +53,8 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
     @Autowired
     private DeviceSessionService sessionService;
 
-    @Autowired
-    private TelemetryProcessingService telemetryService;
+    // @Autowired
+    // private TelemetryProcessingService telemetryService;
 
     @Autowired
     private GT06ProtocolParser protocolParser;
@@ -595,33 +595,6 @@ private int getInt(Map<String, Object> map, String key) {
             logger.error("💥 Error handling LBS packet: {}", e.getMessage(), e);
             sendGenericAck(ctx, frame);
         }
-    }
-
-    /**
-     * Enhanced location data logging
-     */
-    private void logLocationDataEnhanced(Location location, String imei, String remoteAddress, int protocolNumber) {
-        logger.info("📍 ========== LOCATION DATA RECEIVED ==========");
-        logger.info("📍 IMEI: {}", imei);
-        logger.info("📍 Source: {}", remoteAddress);
-        logger.info("📍 Protocol: 0x{:02X}", protocolNumber);
-        logger.info("📍 Latitude: {:.6f}", location.getLatitude());
-        logger.info("📍 Longitude: {:.6f}", location.getLongitude());
-        logger.info("📍 Speed: {:.1f} km/h", location.getSpeed());
-        logger.info("📍 Altitude: {:.1f} meters", location.getAltitude());
-        logger.info("📍 Course: {}°", location.getCourse());
-        logger.info("📍 Satellites: {}", location.getSatellites());
-        logger.info("📍 GPS Valid: {}", location.isValid() ? "YES" : "NO");
-        logger.info("📍 Timestamp: {}", location.getTimestamp());
-        logger.info("📍 Received At: {}", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-
-        // Google Maps link for verification
-        if (location.getLatitude() != 0.0 && location.getLongitude() != 0.0) {
-            logger.info("📍 Google Maps: https://maps.google.com/maps?q={:.6f},{:.6f}",
-                    location.getLatitude(), location.getLongitude());
-        }
-
-        logger.info("📍 ============================================");
     }
 
     /**

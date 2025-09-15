@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.infrastructure.netty;
+package com.wheelseye.devicegateway.protocol;
 
 import java.time.Instant;
 import java.time.LocalDateTime;

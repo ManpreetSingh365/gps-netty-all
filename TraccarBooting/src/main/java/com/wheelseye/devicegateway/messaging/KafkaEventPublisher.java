@@ -1,6 +1,5 @@
-package com.wheelseye.devicegateway.infrastructure.messaging;
+package com.wheelseye.devicegateway.messaging;
 
-import com.wheelseye.devicegateway.application.ports.EventPublisher;
 import com.wheelseye.devicegateway.domain.events.CommandEvent;
 import com.wheelseye.devicegateway.domain.events.DeviceSessionEvent;
 import com.wheelseye.devicegateway.domain.events.TelemetryEvent;

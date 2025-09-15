@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.application.ports;
+package com.wheelseye.devicegateway.repository;
 
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;

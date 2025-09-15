@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.adapters.web.dto;
+package com.wheelseye.devicegateway.dto;
 
 public class DeviceSessionDto {
     private String sessionId;

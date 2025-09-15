@@ -1,6 +1,5 @@
-package com.wheelseye.devicegateway.infrastructure.netty;
+package com.wheelseye.devicegateway.protocol;
 
-import com.wheelseye.devicegateway.application.services.DeviceSessionService;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -13,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import com.wheelseye.devicegateway.service.DeviceSessionService;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -64,7 +65,7 @@ public class NettyTcpServer {
                             pipeline.addLast(new IdleStateHandler(0, 0, 300, TimeUnit.SECONDS));
                             
                             // Add GT06 frame decoder
-                            pipeline.addLast(new GT06FrameDecoder());
+                            // pipeline.addLast(new GT06FrameDecoder());
                             
                             // Add GT06 protocol handler
                             pipeline.addLast(gt06Handler);
