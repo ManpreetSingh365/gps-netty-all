@@ -1,5 +1,9 @@
 package com.wheelseye.devicegateway.helper;
 
+import java.nio.ByteBuffer;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -10,6 +14,7 @@ import com.wheelseye.devicegateway.domain.mappers.LocationMapper;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
 import com.wheelseye.devicegateway.domain.valueobjects.Location;
 import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
+import com.wheelseye.devicegateway.dto.LocationDto;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 
 import org.slf4j.Logger;
@@ -365,8 +370,17 @@ public class Gt06ParsingMethods {
             data.put("gpsValid", gpsValid);
             data.put("accuracy", accuracy);
             data.put("altitude", 0.0);
-            data.put("fixType", satellites >= 4 ? "3D Fix" : satellites >= 3 ? "2D Fix" : "No Fix");
+            // data.put("fixType", satellites >= 4 ? "3D Fix" : satellites >= 3 ? "2D Fix" : "No Fix");
 
+            // private final double latitude;
+            // private final double longitude;
+            // private final double speed;
+            // private final double course;
+            // private final double accuracy;
+            // private final int satellites;
+            // private final boolean valid;
+            // private final Instant timestamp;
+        
             logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
                     latitude, longitude, speed, satellites, gpsValid);
 
@@ -378,101 +392,148 @@ public class Gt06ParsingMethods {
         }
     }
 
-    public Location parseLocation(ChannelHandlerContext ctx, ByteBuf content) {
-        Location location = null;
-        String remoteAddress = ctx.channel().remoteAddress().toString();
-        Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
+    
 
-        if (sessionOpt.isEmpty()) {
-            logger.warn("❌ No authenticated session for location from {}", remoteAddress);
-            return null;
-        }
+    public LocationDto parseLocation(ByteBuffer buf) {
 
-        try {
-            content.markReaderIndex(); // mark start position
+        // ---- Timestamp ----
+        int year = 2000 + Byte.toUnsignedInt(buf.get());
+        int month = Byte.toUnsignedInt(buf.get());
+        int day = Byte.toUnsignedInt(buf.get());
+        int hour = Byte.toUnsignedInt(buf.get());
+        int minute = Byte.toUnsignedInt(buf.get());
+        int second = Byte.toUnsignedInt(buf.get());
 
-            if (content.readableBytes() < 18) {
-                logger.warn("Insufficient bytes for location data: {}", content.readableBytes());
-                return null; // No location object to return
-            }
+        LocalDateTime dateTime = LocalDateTime.of(year, month, day, hour, minute, second);
+        Instant timestamp = dateTime.toInstant(ZoneOffset.UTC);
 
-            // ---- Parse Date & Time (first 6 bytes) ----
-            int year = 2000 + content.readUnsignedByte();
-            int month = content.readUnsignedByte();
-            int day = content.readUnsignedByte();
-            int hour = content.readUnsignedByte();
-            int minute = content.readUnsignedByte();
-            int second = content.readUnsignedByte();
+        // ---- Satellites ----
+        int satellitesByte = Byte.toUnsignedInt(buf.get());
+        int satellites = satellitesByte & 0x0F;   // lower 4 bits often count
+        // (upper 4 bits sometimes indicate GPS fix status, varies by firmware)
 
-            String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
-                    year, month, day, hour, minute, second);
+        // ---- Latitude / Longitude ----
+        long latRaw = Integer.toUnsignedLong(buf.getInt());
+        long lonRaw = Integer.toUnsignedLong(buf.getInt());
+        double latitude = latRaw / 1800000.0;
+        double longitude = lonRaw / 1800000.0;
 
-            // ---- Parse Satellites byte ----
-            int satellites = content.readUnsignedByte();
+        // ---- Speed ----
+        double speed = Byte.toUnsignedInt(buf.get()); // km/h
 
-            // ---- Parse Latitude & Longitude ----
-            long latRaw = content.readUnsignedInt();
-            long lonRaw = content.readUnsignedInt();
+        // ---- Course & Status ----
+        int courseStatus = Short.toUnsignedInt(buf.getShort());
+        double course = courseStatus & 0x03FF; // 10 bits
+        boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
+        boolean west = ((courseStatus >> 10) & 0x01) == 1;
+        boolean south = ((courseStatus >> 11) & 0x01) == 1;
 
-            double latitude = latRaw / 1800000.0;
-            double longitude = lonRaw / 1800000.0;
+        if (south) latitude = -latitude;
+        if (west) longitude = -longitude;
 
-            // ---- Parse Speed & Course ----
-            double speed = content.readUnsignedByte();
-            int courseStatus = content.readUnsignedShort();
-            int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
+        // ---- Accuracy (approx) ----
+        double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
 
-            boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
-            boolean west = ((courseStatus >> 10) & 0x01) == 1;
-            boolean south = ((courseStatus >> 11) & 0x01) == 1;
-
-            if (south)
-                latitude = -latitude;
-            if (west)
-                longitude = -longitude;
-
-            // ---- India-specific correction ----
-            if (latitude < 6 || latitude > 37)
-                latitude = Math.abs(latitude);
-            if (longitude < 68 || longitude > 97)
-                longitude = Math.abs(longitude);
-
-            // ---- Compute Accuracy ----
-            double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
-
-            // ---- Collect Raw Hex for Debugging ----
-            content.resetReaderIndex();
-            byte[] rawBytes = new byte[Math.min(content.readableBytes(), 16)];
-            content.readBytes(rawBytes);
-            String locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(rawBytes));
-            DeviceSession session = sessionOpt.get();
-            String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
-
-            String sid = session.getId() != null ? session.getId() : "unknown-id";
-            logger.info("📍 Processing location packet for IMEI: {}", imei);
-
-            // ---- Build Location ----
-            location = new Location(
-                    latitude,
-                    longitude,
-                    0.0, // Altitude default
-                    speed,
-                    heading,
-                    satellites,
-                    gpsValid,
-                    deviceTime // Timestamp string
-            );
-
-            logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
-                    latitude, longitude, speed, satellites, gpsValid);
-
-            return location;
-
-        } catch (Exception e) {
-            logger.error("Error parsing GT06 location: {}", e.getMessage(), e);
-            return null;
-        }
+        return new LocationDto(timestamp, gpsValid, latitude, longitude, speed, course, accuracy, satellites);
     }
+    
+    // public Location parseLocation(ChannelHandlerContext ctx, ByteBuf content) {
+    //     Location location = null;
+    //     String remoteAddress = ctx.channel().remoteAddress().toString();
+    //     Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
+
+    //     if (sessionOpt.isEmpty()) {
+    //         logger.warn("❌ No authenticated session for location from {}", remoteAddress);
+    //         return null;
+    //     }
+
+    //     try {
+    //         content.markReaderIndex(); // mark start position
+
+    //         if (content.readableBytes() < 18) {
+    //             logger.warn("Insufficient bytes for location data: {}", content.readableBytes());
+    //             return null; // No location object to return
+    //         }
+
+    //         // ---- Parse Date & Time (first 6 bytes) ----
+    //         int year = 2000 + content.readUnsignedByte();
+    //         int month = content.readUnsignedByte();
+    //         int day = content.readUnsignedByte();
+    //         int hour = content.readUnsignedByte();
+    //         int minute = content.readUnsignedByte();
+    //         int second = content.readUnsignedByte();
+
+    //         String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
+    //                 year, month, day, hour, minute, second);
+
+    //         // ---- Parse Satellites byte ----
+    //         int satellites = content.readUnsignedByte();
+
+    //         // ---- Parse Latitude & Longitude ----
+    //         long latRaw = content.readUnsignedInt();
+    //         long lonRaw = content.readUnsignedInt();
+
+    //         double latitude = latRaw / 1800000.0;
+    //         double longitude = lonRaw / 1800000.0;
+
+    //         // ---- Parse Speed & Course ----
+    //         double speed = content.readUnsignedByte();
+    //         int courseStatus = content.readUnsignedShort();
+    //         int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
+
+    //         boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
+    //         boolean west = ((courseStatus >> 10) & 0x01) == 1;
+    //         boolean south = ((courseStatus >> 11) & 0x01) == 1;
+
+    //         if (south)
+    //             latitude = -latitude;
+    //         if (west)
+    //             longitude = -longitude;
+
+    //         // ---- India-specific correction ----
+    //         if (latitude < 6 || latitude > 37)
+    //             latitude = Math.abs(latitude);
+    //         if (longitude < 68 || longitude > 97)
+    //             longitude = Math.abs(longitude);
+
+    //         // ---- Compute Accuracy ----
+    //         double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
+
+    //         // ---- Collect Raw Hex for Debugging ----
+    //         content.resetReaderIndex();
+    //         byte[] rawBytes = new byte[Math.min(content.readableBytes(), 16)];
+    //         content.readBytes(rawBytes);
+    //         String locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(rawBytes));
+    //         DeviceSession session = sessionOpt.get();
+    //         String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
+
+    //         String sid = session.getId() != null ? session.getId() : "unknown-id";
+    //         logger.info("📍 Processing location packet for IMEI: {}", imei);
+
+    //         // ---- Build Location ----
+    //         location = new Location(
+    //                 latitude,
+    //                 longitude,
+    //                 0.0, // Altitude default
+    //                 speed,
+    //                 heading,
+    //                 satellites,
+    //                 gpsValid,
+    //                 deviceTime // Timestamp string
+
+    //                 deviceTime, gpsValid, latitude, longitude, speed, course, satellites
+    //         );
+
+    //         logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
+    //                 latitude, longitude, speed, satellites, gpsValid);
+
+    //         return location;
+
+    //     } catch (Exception e) {
+    //         logger.error("Error parsing GT06 location: {}", e.getMessage(), e);
+    //         return null;
+    //     }
+    // }
 
     /**
      * Parse GT06 device status from ByteBuf content

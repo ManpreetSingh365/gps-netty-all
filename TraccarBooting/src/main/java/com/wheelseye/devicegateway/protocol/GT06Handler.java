@@ -144,19 +144,19 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
                 }
                 case MSG_GPS_LBS_1 -> {
                     logger.info("📍 GPS+LBS PACKET (0x12) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 case MSG_GPS_LBS_2 -> {
                     logger.info("📍 GPS+LBS PACKET (0x22) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 case MSG_GPS_LBS_STATUS_1 -> {
                     logger.info("📍 GPS+LBS+STATUS (0x16) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 case MSG_GPS_LBS_STATUS_2 -> {
                     logger.info("📍 GPS+LBS+STATUS (0x26) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 case MSG_STATUS -> {
                     logger.info("📊 STATUS PACKET (0x13) detected from {}", remoteAddress);
@@ -176,15 +176,15 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
                 }
                 case MSG_LOCATION_0x94 -> {
                     logger.info("📍 LOCATION PACKET (0x94) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 case MSG_GPS_PHONE_NUMBER -> {
                     logger.info("📍 GPS+PHONE PACKET (0x1A) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 case MSG_GPS_OFFLINE -> {
                     logger.info("📍 GPS OFFLINE PACKET (0x15) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 case MSG_LBS_PHONE -> {
                     logger.info("📶 LBS+PHONE PACKET (0x17) detected from {}", remoteAddress);
@@ -196,7 +196,7 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
                 }
                 case MSG_GPS_DOG -> {
                     logger.info("📍 GPS DOG PACKET (0x32) detected from {}", remoteAddress);
-                    handleLocationPacket(ctx, frame);
+                    // handleLocationPacket(ctx, frame);
                 }
                 default -> {
                     logger.warn("❓ UNKNOWN PROTOCOL 0x{:02X} detected from {}", protocolNumber, remoteAddress);
@@ -355,56 +355,56 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
     /**
      * Enhanced location packet handling with immediate display
      */
-    private void handleLocationPacket(ChannelHandlerContext ctx, MessageFrame frame) {
-        String remoteAddress = ctx.channel().remoteAddress().toString();
+    // private void handleLocationPacket(ChannelHandlerContext ctx, MessageFrame frame) {
+    //     String remoteAddress = ctx.channel().remoteAddress().toString();
 
-        Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
-        if (sessionOpt.isEmpty()) {
-            logger.warn("❌ No authenticated session for location from {}", remoteAddress);
-            return;
-        }
+    //     Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
+    //     if (sessionOpt.isEmpty()) {
+    //         logger.warn("❌ No authenticated session for location from {}", remoteAddress);
+    //         return;
+    //     }
 
-        try {
-            DeviceSession session = sessionOpt.get();
-            String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
+    //     try {
+    //         DeviceSession session = sessionOpt.get();
+    //         String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
             
-            String sid = session.getId() != null ? session.getId() : "unknown-id";
-            logger.info("📍 Processing location packet for IMEI: {}", imei);
+    //         String sid = session.getId() != null ? session.getId() : "unknown-id";
+    //         logger.info("📍 Processing location packet for IMEI: {}", imei);
 
-            // Parse and display location immediately
-            Location location = gt06ParsingMethods.parseLocation(ctx, frame.getContent());
+    //         // Parse and display location immediately
+    //         Location location = gt06ParsingMethods.parseLocation(ctx, frame.getContent());
             
 
-            if (location != null) {
-                // IMMEDIATE location display
-                var protoLocation =  LocationMapper.toProto(location);
-                if(protoLocation != null){
-                   kafkaAdapter.sendMessage("location.device", sid, protoLocation.toByteArray());
-                    logger.info("📍 Got location packet for IMEI: {}", imei);
-                }
-                // logLocationDataEnhanced(location, imei, remoteAddress, frame.getProtocolNumber());
-                logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame.getProtocolNumber());
-                session.markLocationDataReceived();
-            } else {
-                logger.warn("❌ Failed to parse location data for IMEI: {} - Raw data: {}",
-                        imei, ByteBufUtil.hexDump(frame.getContent()));
+    //         if (location != null) {
+    //             // IMMEDIATE location display
+    //             var protoLocation =  LocationMapper.toProto(location);
+    //             if(protoLocation != null){
+    //                kafkaAdapter.sendMessage("location.device", sid, protoLocation.toByteArray());
+    //                 logger.info("📍 Got location packet for IMEI: {}", imei);
+    //             }
+    //             // logLocationDataEnhanced(location, imei, remoteAddress, frame.getProtocolNumber());
+    //             logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame.getProtocolNumber());
+    //             session.markLocationDataReceived();
+    //         } else {
+    //             logger.warn("❌ Failed to parse location data for IMEI: {} - Raw data: {}",
+    //                     imei, ByteBufUtil.hexDump(frame.getContent()));
 
-                // Try logDeviceReport with complete device status, location data, LBS info, alarms, and debugging data.
-                logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame.getProtocolNumber());
-            }
+    //             // Try logDeviceReport with complete device status, location data, LBS info, alarms, and debugging data.
+    //             logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame.getProtocolNumber());
+    //         }
 
-            // KAFKA DISABLED - Only local processing
-            logger.info("📍 Location processed locally (Kafka disabled as requested) for IMEI: {}", imei);
+    //         // KAFKA DISABLED - Only local processing
+    //         logger.info("📍 Location processed locally (Kafka disabled as requested) for IMEI: {}", imei);
 
-            session.updateActivity();
-            sessionService.saveSession(session);
-            sendGenericAck(ctx, frame);
+    //         session.updateActivity();
+    //         sessionService.saveSession(session);
+    //         sendGenericAck(ctx, frame);
 
-        } catch (Exception e) {
-            logger.error("💥 Error handling location from {}: {}", remoteAddress, e.getMessage(), e);
-            sendGenericAck(ctx, frame);
-        }
-    }
+    //     } catch (Exception e) {
+    //         logger.error("💥 Error handling location from {}: {}", remoteAddress, e.getMessage(), e);
+    //         sendGenericAck(ctx, frame);
+    //     }
+    // }
 
     /**
      * FIXED: Log device report with complete device status, location data, LBS info, alarms, and debugging data.

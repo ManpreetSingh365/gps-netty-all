@@ -2,8 +2,8 @@ package com.wheelseye.devicegateway.messaging;
 
 import com.wheelseye.devicegateway.domain.events.CommandEvent;
 import com.wheelseye.devicegateway.domain.events.DeviceSessionEvent;
-import com.wheelseye.devicegateway.domain.events.TelemetryEvent;
-import com.wheelseye.devicegateway.domain.mappers.TelemetryEventMapper;
+// import com.wheelseye.devicegateway.domain.events.TelemetryEvent;
+// import com.wheelseye.devicegateway.domain.mappers.TelemetryEventMapper;
 import com.wheelseye.devicegateway.domain.mappers.CommandEventMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,19 +45,19 @@ public class KafkaEventPublisher implements EventPublisher {
         }
     }
 
-    @Override
-    public void publishTelemetryEvent(TelemetryEvent event) {
-        try {
-            kafkaTemplate.send(telemetryInboundTopic, event.getImei().getValue(), TelemetryEventMapper.toProto(event).toByteArray())
-                    .addCallback(
-                            result -> logger.debug("Published telemetry event for IMEI: {}",
-                                    event.getImei().getValue()),
-                            failure -> logger.error("Failed to publish telemetry event for IMEI: {}",
-                                    event.getImei().getValue(), failure));
-        } catch (Exception e) {
-            logger.error("Error publishing telemetry event", e);
-        }
-    }
+    // @Override
+    // public void publishTelemetryEvent(TelemetryEvent event) {
+    //     try {
+    //         kafkaTemplate.send(telemetryInboundTopic, event.getImei().getValue(), TelemetryEventMapper.toProto(event).toByteArray())
+    //                 .addCallback(
+    //                         result -> logger.debug("Published telemetry event for IMEI: {}",
+    //                                 event.getImei().getValue()),
+    //                         failure -> logger.error("Failed to publish telemetry event for IMEI: {}",
+    //                                 event.getImei().getValue(), failure));
+    //     } catch (Exception e) {
+    //         logger.error("Error publishing telemetry event", e);
+    //     }
+    // }
 
     @Override
     public void publishCommandEvent(CommandEvent event) {
