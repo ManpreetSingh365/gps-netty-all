@@ -1,8 +1,14 @@
 package com.aman.location.dto;
 
-public class LocationDto {
-    private String sid;
-    private double lat;
-    private double lon;
-    private String timestamp;
+import java.time.Instant;
+
+public record LocationDto(
+        Instant timestamp,
+        boolean gpsValid,
+        double latitude,
+        double longitude,
+        double speed,
+        double course,
+        double accuracy,
+        int satellites) {
 }

@@ -394,35 +394,34 @@ public class Gt06ParsingMethods {
 
     
 
-    public LocationDto parseLocation(ByteBuffer buf) {
+    public LocationDto parseLocation(ByteBuf buf) {
 
         // ---- Timestamp ----
-        int year = 2000 + Byte.toUnsignedInt(buf.get());
-        int month = Byte.toUnsignedInt(buf.get());
-        int day = Byte.toUnsignedInt(buf.get());
-        int hour = Byte.toUnsignedInt(buf.get());
-        int minute = Byte.toUnsignedInt(buf.get());
-        int second = Byte.toUnsignedInt(buf.get());
+        int year = 2000 + (buf.readUnsignedByte());
+        int month = buf.readUnsignedByte();
+        int day = buf.readUnsignedByte();
+        int hour = buf.readUnsignedByte();
+        int minute = buf.readUnsignedByte();
+        int second = buf.readUnsignedByte();
 
         LocalDateTime dateTime = LocalDateTime.of(year, month, day, hour, minute, second);
         Instant timestamp = dateTime.toInstant(ZoneOffset.UTC);
 
         // ---- Satellites ----
-        int satellitesByte = Byte.toUnsignedInt(buf.get());
-        int satellites = satellitesByte & 0x0F;   // lower 4 bits often count
-        // (upper 4 bits sometimes indicate GPS fix status, varies by firmware)
+        int satellitesByte = buf.readUnsignedByte();
+        int satellites = satellitesByte & 0x0F;   // lower 4 bits
 
         // ---- Latitude / Longitude ----
-        long latRaw = Integer.toUnsignedLong(buf.getInt());
-        long lonRaw = Integer.toUnsignedLong(buf.getInt());
+        long latRaw = Integer.toUnsignedLong(buf.readInt());
+        long lonRaw = Integer.toUnsignedLong(buf.readInt());
         double latitude = latRaw / 1800000.0;
         double longitude = lonRaw / 1800000.0;
 
         // ---- Speed ----
-        double speed = Byte.toUnsignedInt(buf.get()); // km/h
+        double speed = buf.readUnsignedByte(); // km/h
 
         // ---- Course & Status ----
-        int courseStatus = Short.toUnsignedInt(buf.getShort());
+        int courseStatus = buf.readUnsignedShort();
         double course = courseStatus & 0x03FF; // 10 bits
         boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
         boolean west = ((courseStatus >> 10) & 0x01) == 1;

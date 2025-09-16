@@ -1,12 +1,11 @@
 package com.aman.location.consumer;
 
-import com.aman.location.entity.Location;
+import com.aman.location.dto.LocationDto;
 import com.aman.location.mapper.LocationMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.FluxSink;
-
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -14,9 +13,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class LocationConsumer {
 
     // Keep a list of active subscribers
-    private final List<FluxSink<Location>> subscribers = new CopyOnWriteArrayList<>();
+    private final List<FluxSink<LocationDto>> subscribers = new CopyOnWriteArrayList<>();
 
-    public void subscribe(FluxSink<Location> sink) {
+    public void subscribe(FluxSink<LocationDto> sink) {
         subscribers.add(sink);
         sink.onCancel(() -> subscribers.remove(sink));
     }
@@ -30,7 +29,7 @@ public class LocationConsumer {
             com.aman.location.protobuf.Location protoLocation = com.aman.location.protobuf.Location.parseFrom(data);
 
             // Convert protobuf -> internal Location using mapper
-            Location location = LocationMapper.fromProto(protoLocation);
+            LocationDto location = LocationMapper.fromProto(protoLocation);
             System.out.println("Received location: " + location);
             // Push to all active subscribers
             subscribers.forEach(sink -> sink.next(location));

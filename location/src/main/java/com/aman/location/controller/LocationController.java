@@ -1,8 +1,9 @@
 package com.aman.location.controller;
 
 
-import com.aman.location.entity.Location;
 import com.aman.location.consumer.LocationConsumer;
+import com.aman.location.dto.LocationDto;
+
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,10 +20,10 @@ public class LocationController {
     }
 
     @GetMapping(value = "/locations/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<Location>> streamLocations() {
-        return Flux.<Location>create(locationConsumer::subscribe)
+    public Flux<ServerSentEvent<LocationDto>> streamLocations() {
+        return Flux.<LocationDto>create(locationConsumer::subscribe)
                 .map(location ->
-                        ServerSentEvent.<Location>builder(location).build()
+                        ServerSentEvent.<LocationDto>builder(location).build()
                 );
     }
 }
