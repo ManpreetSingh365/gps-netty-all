@@ -1,27 +1,23 @@
 package com.wheelseye.devicegateway.helper;
 
-import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
-
-import com.wheelseye.devicegateway.config.KafkaAdapter;
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
-import com.wheelseye.devicegateway.domain.mappers.LocationMapper;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
-import com.wheelseye.devicegateway.domain.valueobjects.Location;
 import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
+import com.wheelseye.devicegateway.dto.DeviceStatusDto;
+import com.wheelseye.devicegateway.dto.AlarmStatusDto;
+import com.wheelseye.devicegateway.dto.DeviceExtendedFeatureDto;
+import com.wheelseye.devicegateway.dto.DeviceIOPortsDto;
+import com.wheelseye.devicegateway.dto.DeviceLbsDataDto;
 import com.wheelseye.devicegateway.dto.LocationDto;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -32,6 +28,16 @@ public class Gt06ParsingMethods {
 
     private static final int HEADER_78 = 0x7878;
     private static final int HEADER_79 = 0x7979;
+
+    // Offsets
+    private static final int COURSE_STATUS_OFFSET = 17;
+    private static final int IO_OFFSET = 20;
+
+    // Battery calculation
+    private static final int VOLTAGE_MIN = 3400;
+    private static final int VOLTAGE_MAX = 4200;
+
+    
 
     @Autowired
     private DeviceSessionService sessionService;
@@ -293,366 +299,159 @@ public class Gt06ParsingMethods {
         return (~crc) & 0xFFFF;
     }
 
-    public Map<String, Object> parseLocationData(ByteBuf content) {
-        Map<String, Object> data = new HashMap<>();
-
+    public LocationDto parseLocation(ByteBuf buf) {
         try {
-            content.markReaderIndex(); // mark start position
-
-            if (content.readableBytes() < 18) {
-                logger.warn("Insufficient bytes for location data: {}", content.readableBytes());
-                return getDefaultLocationData();
+            // Validate buffer size
+            if (buf.readableBytes() < 20) {
+                logger.warn("⚠️ Insufficient data for GPS location parsing. Expected: 20+ bytes, Available: {} bytes",
+                        buf.readableBytes());
+                return LocationDto.getDefaultLocation();
             }
 
-            // ---- Parse Date & Time (first 6 bytes) ----
-            int year = 2000 + content.readUnsignedByte();
-            int month = content.readUnsignedByte();
-            int day = content.readUnsignedByte();
-            int hour = content.readUnsignedByte();
-            int minute = content.readUnsignedByte();
-            int second = content.readUnsignedByte();
+            // Parse timestamp
+            int year = 2000 + buf.readUnsignedByte();
+            int month = buf.readUnsignedByte();
+            int day = buf.readUnsignedByte();
+            int hour = buf.readUnsignedByte();
+            int minute = buf.readUnsignedByte();
+            int second = buf.readUnsignedByte();
 
-            String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
-                    year, month, day, hour, minute, second);
+            if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+                logger.warn("⚠️ Invalid timestamp: {}-{}-{} {}:{}:{}", year, month, day, hour, minute, second);
+                return LocationDto.getDefaultLocation();
+            }
 
-            // ---- Parse Satellites byte ----
-            int satellites = content.readUnsignedByte();
+            LocalDateTime dateTime = LocalDateTime.of(year, month, day, hour, minute, second);
+            Instant timestamp = dateTime.toInstant(ZoneOffset.UTC);
 
-            // ---- Parse Latitude & Longitude ----
-            long latRaw = content.readUnsignedInt();
-            long lonRaw = content.readUnsignedInt();
+            // Parse satellites
+            int satellitesByte = buf.readUnsignedByte();
+            int satellites = satellitesByte & 0x0F;
 
+            // Parse coordinates
+            long latRaw = Integer.toUnsignedLong(buf.readInt());
+            long lonRaw = Integer.toUnsignedLong(buf.readInt());
             double latitude = latRaw / 1800000.0;
             double longitude = lonRaw / 1800000.0;
 
-            // ---- Parse Speed & Course ----
-            double speed = content.readUnsignedByte();
-            int courseStatus = content.readUnsignedShort();
-            int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
+            // Parse speed
+            double speed = buf.readUnsignedByte();
 
+            // Parse course and status
+            int courseStatus = buf.readUnsignedShort();
+            double course = courseStatus & 0x03FF;
             boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
-            boolean west = ((courseStatus >> 10) & 0x01) == 1; // Correct bit mapping
-            boolean south = ((courseStatus >> 11) & 0x01) == 1;
 
-            if (south)
+            // CORRECTED hemisphere logic
+            boolean isWest = ((courseStatus >> 10) & 0x01) == 1;
+            boolean isSouth = ((courseStatus >> 11) & 0x01) == 1;
+
+            if (isSouth)
                 latitude = -latitude;
-            if (west)
+            if (isWest)
                 longitude = -longitude;
 
-            // ---- India-specific correction ----
-            // India is always North/East, so flip if out of India bounds
-            if (latitude < 6 || latitude > 37)
-                latitude = Math.abs(latitude);
-            if (longitude < 68 || longitude > 97)
+            // **INDIA REGION FIX** - Force Eastern hemisphere for India coordinates
+            if (latitude > 8.0 && latitude < 37.0 && longitude < 0 && Math.abs(longitude) >= 68.0
+                    && Math.abs(longitude) <= 97.0) {
+                logger.info("🔧 India region detected - correcting longitude from {} to {}", longitude,
+                        Math.abs(longitude));
                 longitude = Math.abs(longitude);
+            }
 
-            // ---- Compute Accuracy ----
+            // Validate final coordinates
+            if (Math.abs(latitude) > 90.0 || Math.abs(longitude) > 180.0) {
+                logger.error("❌ Invalid coordinates: lat={}, lon={}", latitude, longitude);
+                return LocationDto.getDefaultLocation();
+            }
+
             double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
 
-            // ---- Collect Raw Hex for Debugging ----
-            content.resetReaderIndex();
-            byte[] rawBytes = new byte[Math.min(content.readableBytes(), 16)];
-            content.readBytes(rawBytes);
-            String locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(rawBytes));
-
-            // ---- Populate Map ----
-            data.put("locationHex", locationHex);
-            data.put("deviceTime", deviceTime);
-            data.put("latitude", latitude);
-            data.put("longitude", longitude);
-            data.put("latitudeAbs", Math.abs(latitude));
-            data.put("longitudeAbs", Math.abs(longitude));
-            data.put("latDirection", latitude >= 0 ? "N" : "S");
-            data.put("lonDirection", longitude >= 0 ? "E" : "W");
-            data.put("speed", speed);
-            data.put("heading", heading);
-            data.put("satellites", satellites);
-            data.put("gpsValid", gpsValid);
-            data.put("accuracy", accuracy);
-            data.put("altitude", 0.0);
-            // data.put("fixType", satellites >= 4 ? "3D Fix" : satellites >= 3 ? "2D Fix" : "No Fix");
-
-            // private final double latitude;
-            // private final double longitude;
-            // private final double speed;
-            // private final double course;
-            // private final double accuracy;
-            // private final int satellites;
-            // private final boolean valid;
-            // private final Instant timestamp;
-        
-            logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
-                    latitude, longitude, speed, satellites, gpsValid);
-
-            return data;
+            return new LocationDto(timestamp, gpsValid, latitude, longitude, speed, course, accuracy, satellites);
 
         } catch (Exception e) {
-            logger.error("Error parsing GT06 location: {}", e.getMessage(), e);
-            return getDefaultLocationData();
+            logger.error("Error parsing Device Location: {}", e.getMessage(), e);
+            return LocationDto.getDefaultLocation();
         }
     }
 
-    
-
-    public LocationDto parseLocation(ByteBuf buf) {
-
-        // ---- Timestamp ----
-        int year = 2000 + (buf.readUnsignedByte());
-        int month = buf.readUnsignedByte();
-        int day = buf.readUnsignedByte();
-        int hour = buf.readUnsignedByte();
-        int minute = buf.readUnsignedByte();
-        int second = buf.readUnsignedByte();
-
-        LocalDateTime dateTime = LocalDateTime.of(year, month, day, hour, minute, second);
-        Instant timestamp = dateTime.toInstant(ZoneOffset.UTC);
-
-        // ---- Satellites ----
-        int satellitesByte = buf.readUnsignedByte();
-        int satellites = satellitesByte & 0x0F;   // lower 4 bits
-
-        // ---- Latitude / Longitude ----
-        long latRaw = Integer.toUnsignedLong(buf.readInt());
-        long lonRaw = Integer.toUnsignedLong(buf.readInt());
-        double latitude = latRaw / 1800000.0;
-        double longitude = lonRaw / 1800000.0;
-
-        // ---- Speed ----
-        double speed = buf.readUnsignedByte(); // km/h
-
-        // ---- Course & Status ----
-        int courseStatus = buf.readUnsignedShort();
-        double course = courseStatus & 0x03FF; // 10 bits
-        boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
-        boolean west = ((courseStatus >> 10) & 0x01) == 1;
-        boolean south = ((courseStatus >> 11) & 0x01) == 1;
-
-        if (south) latitude = -latitude;
-        if (west) longitude = -longitude;
-
-        // ---- Accuracy (approx) ----
-        double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
-
-        return new LocationDto(timestamp, gpsValid, latitude, longitude, speed, course, accuracy, satellites);
-    }
-    
-    // public Location parseLocation(ChannelHandlerContext ctx, ByteBuf content) {
-    //     Location location = null;
-    //     String remoteAddress = ctx.channel().remoteAddress().toString();
-    //     Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
-
-    //     if (sessionOpt.isEmpty()) {
-    //         logger.warn("❌ No authenticated session for location from {}", remoteAddress);
-    //         return null;
-    //     }
-
-    //     try {
-    //         content.markReaderIndex(); // mark start position
-
-    //         if (content.readableBytes() < 18) {
-    //             logger.warn("Insufficient bytes for location data: {}", content.readableBytes());
-    //             return null; // No location object to return
-    //         }
-
-    //         // ---- Parse Date & Time (first 6 bytes) ----
-    //         int year = 2000 + content.readUnsignedByte();
-    //         int month = content.readUnsignedByte();
-    //         int day = content.readUnsignedByte();
-    //         int hour = content.readUnsignedByte();
-    //         int minute = content.readUnsignedByte();
-    //         int second = content.readUnsignedByte();
-
-    //         String deviceTime = String.format("%04d-%02d-%02dT%02d:%02d:%02dZ",
-    //                 year, month, day, hour, minute, second);
-
-    //         // ---- Parse Satellites byte ----
-    //         int satellites = content.readUnsignedByte();
-
-    //         // ---- Parse Latitude & Longitude ----
-    //         long latRaw = content.readUnsignedInt();
-    //         long lonRaw = content.readUnsignedInt();
-
-    //         double latitude = latRaw / 1800000.0;
-    //         double longitude = lonRaw / 1800000.0;
-
-    //         // ---- Parse Speed & Course ----
-    //         double speed = content.readUnsignedByte();
-    //         int courseStatus = content.readUnsignedShort();
-    //         int heading = courseStatus & 0x03FF; // lowest 10 bits are heading
-
-    //         boolean gpsValid = ((courseStatus >> 12) & 0x01) == 1;
-    //         boolean west = ((courseStatus >> 10) & 0x01) == 1;
-    //         boolean south = ((courseStatus >> 11) & 0x01) == 1;
-
-    //         if (south)
-    //             latitude = -latitude;
-    //         if (west)
-    //             longitude = -longitude;
-
-    //         // ---- India-specific correction ----
-    //         if (latitude < 6 || latitude > 37)
-    //             latitude = Math.abs(latitude);
-    //         if (longitude < 68 || longitude > 97)
-    //             longitude = Math.abs(longitude);
-
-    //         // ---- Compute Accuracy ----
-    //         double accuracy = satellites > 0 ? Math.max(3.0, 15.0 - satellites) : 50.0;
-
-    //         // ---- Collect Raw Hex for Debugging ----
-    //         content.resetReaderIndex();
-    //         byte[] rawBytes = new byte[Math.min(content.readableBytes(), 16)];
-    //         content.readBytes(rawBytes);
-    //         String locationHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(rawBytes));
-    //         DeviceSession session = sessionOpt.get();
-    //         String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
-
-    //         String sid = session.getId() != null ? session.getId() : "unknown-id";
-    //         logger.info("📍 Processing location packet for IMEI: {}", imei);
-
-    //         // ---- Build Location ----
-    //         location = new Location(
-    //                 latitude,
-    //                 longitude,
-    //                 0.0, // Altitude default
-    //                 speed,
-    //                 heading,
-    //                 satellites,
-    //                 gpsValid,
-    //                 deviceTime // Timestamp string
-
-    //                 deviceTime, gpsValid, latitude, longitude, speed, course, satellites
-    //         );
-
-    //         logger.info("Parsed location: lat={}, lon={}, speed={} km/h, sats={}, valid={}",
-    //                 latitude, longitude, speed, satellites, gpsValid);
-
-    //         return location;
-
-    //     } catch (Exception e) {
-    //         logger.error("Error parsing GT06 location: {}", e.getMessage(), e);
-    //         return null;
-    //     }
-    // }
-
-    /**
-     * Parse GT06 device status from ByteBuf content
-     * Extracts ignition, battery, power, temperature, and signal info
-     */
-    public Map<String, Object> parseDeviceStatus(ByteBuf content) {
-        Map<String, Object> data = new HashMap<>();
-
+    public DeviceStatusDto parseDeviceStatus(ByteBuf content) {
         try {
             content.resetReaderIndex();
 
-            if (content.readableBytes() < 18) {
-                return getDefaultDeviceStatus();
+            if (content.readableBytes() < COURSE_STATUS_OFFSET + 2) {
+                return DeviceStatusDto.getDefaultDeviceStatus();
             }
 
-            // Skip to status data (after location data)
-            content.skipBytes(15);
-
-            String statusHex = "";
-            if (content.readableBytes() >= 8) {
-                byte[] statusBytes = new byte[Math.min(8, content.readableBytes())];
-                content.readBytes(statusBytes);
-                statusHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(statusBytes));
-            }
-
-            // Reset and parse course/status bits from bytes 17-18
-            content.resetReaderIndex();
-            content.skipBytes(17);
-
-            int courseStatus = content.readableBytes() >= 2 ? content.readUnsignedShort() : 0;
-
-            // Extract status flags from course/status word
-            boolean ignition = (courseStatus & 0x2000) != 0;
-            boolean externalPower = (courseStatus & 0x1000) != 0;
-            boolean gpsFixed = ((courseStatus >> 12) & 0x01) == 1;
-
-            // Estimate battery based on external power and other factors
-            int batteryVoltage = externalPower ? (ignition ? 4200 : 4100) : // Engine on/off with external power
-                    (ignition ? 3900 : 3700); // Running on battery
-
-            int batteryPercent = Math.max(0, Math.min(100,
-                    (batteryVoltage - 3400) * 100 / 800));
-
-            boolean charging = externalPower && batteryVoltage > 4000;
-            boolean powerCut = !externalPower && ignition; // Engine on but no external power
-
-            // Estimate temperature (basic GT06 doesn't provide this)
-            int temperature = 25; // Default room temperature
-
-            // Estimate signal strength based on GPS fix and satellite count
-            content.resetReaderIndex();
+            // Satellites
             content.skipBytes(7);
             int satellites = content.readableBytes() > 0 ? content.readUnsignedByte() : 0;
+
+            // Course/status word
+            content.resetReaderIndex();
+            content.skipBytes(COURSE_STATUS_OFFSET);
+            int courseStatus = content.readableBytes() >= 2 ? content.readUnsignedShort() : 0;
+
+            boolean ignition = (courseStatus & 0x2000) != 0;
+            boolean gpsFixed = (courseStatus & 0x1000) != 0;
+            int direction = courseStatus & 0x03FF;
+            boolean externalPower = (courseStatus & 0x4000) != 0;
+
+            int batteryVoltage = externalPower ? (ignition ? 4200 : 4100) : (ignition ? 3900 : 3700);
+            int batteryPercent = Math.max(0,
+                    Math.min(100, (batteryVoltage - VOLTAGE_MIN) * 100 / (VOLTAGE_MAX - VOLTAGE_MIN)));
+            boolean charging = externalPower && batteryVoltage > 4000;
+
             int gsmSignal = gpsFixed ? (satellites > 6 ? -65 : satellites > 4 ? -75 : -85) : -95;
             int signalLevel = Math.max(1, Math.min(5, (gsmSignal + 110) / 20));
 
-            // Calculate runtime (basic estimation)
-            long currentTime = System.currentTimeMillis() / 1000;
-            int runtimeSecs = (int) (currentTime % 3600);
-            int runtimeMins = (int) ((currentTime / 60) % 60);
-            int runtimeHours = (int) ((currentTime / 3600) % 24);
+            String batteryLevelText = getBatteryLevelText(batteryPercent);
+            String voltageLevelText = getVoltageLevelText(batteryVoltage);
 
-            // Populate data map
-            data.put("statusHex", statusHex);
-            data.put("ignition", ignition);
-            data.put("accRaw", ignition ? 1 : 0);
-            data.put("batteryVoltage", batteryVoltage);
-            data.put("batteryPercent", batteryPercent);
-            data.put("externalPower", externalPower);
-            data.put("powerCut", powerCut);
-            data.put("charging", charging);
-            data.put("temperature", temperature);
-            data.put("tempADC", 0x0200 + temperature);
-            data.put("odometer", 0.0); // GT06 basic doesn't track odometer
-            data.put("runtimeHours", runtimeHours);
-            data.put("runtimeMins", runtimeMins);
-            data.put("runtimeSecs", runtimeSecs);
-            data.put("gsmSignal", gsmSignal);
-            data.put("signalLevel", signalLevel);
-            data.put("firmware", "GT06-v1.0");
-            data.put("hardware", "GT06-Enhanced");
-            data.put("statusBits", courseStatus & 0xFF);
-            data.put("batteryLevel", Math.min(6, batteryPercent / 17));
-            data.put("batteryLevelText", getBatteryLevelText(batteryPercent));
-            data.put("voltageLevel", Math.min(6, (batteryVoltage - 3000) / 200));
-            data.put("voltageLevelText", getVoltageLevelText(batteryVoltage));
-            data.put("engineRunning", ignition);
-
-            return data;
+            return new DeviceStatusDto(ignition, ignition ? 1 : 0, gpsFixed, direction, satellites, externalPower,
+                    charging, batteryVoltage, batteryPercent, batteryLevelText, voltageLevelText, gsmSignal,
+                    signalLevel, courseStatus);
 
         } catch (Exception e) {
             logger.error("Error parsing device status: {}", e.getMessage(), e);
-            return getDefaultDeviceStatus();
+            return DeviceStatusDto.getDefaultDeviceStatus();
         }
     }
 
-    /**
-     * Parse GT06 I/O ports and sensors from ByteBuf content
-     * Basic GT06 has limited I/O, so most values are estimated/default
-     */
-    public Map<String, Object> parseIOPorts(ByteBuf content) {
-        Map<String, Object> data = new HashMap<>();
-
+    public DeviceIOPortsDto parseIOPorts(ByteBuf content, double gpsSpeed) {
         try {
             content.resetReaderIndex();
 
-            // GT06 basic protocol has limited I/O data
-            // Most values are defaults or estimated from available data
-
+            // --- Defaults ---
             String ioHex = "N/A";
+            boolean input2 = false;
+            String out1 = "OFF";
+            String out2 = "OFF";
+            Double adc1Voltage = null;
+            Double adc2Voltage = null;
+
+            // --- I/O bytes (usually at offset 20) ---
             if (content.readableBytes() > 20) {
                 content.skipBytes(20);
                 if (content.readableBytes() >= 4) {
-                    byte[] ioBytes = new byte[4]; // FIX: add size
+                    byte[] ioBytes = new byte[4];
                     content.readBytes(ioBytes);
-                    ioHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(ioBytes));
+                    ioHex = ByteBufUtil.hexDump(ioBytes);
+
+                    // Digital inputs
+                    input2 = (ioBytes[0] & 0x02) != 0;
+
+                    // Relay outputs
+                    out1 = (ioBytes[0] & 0x04) != 0 ? "ON" : "OFF";
+                    out2 = (ioBytes[0] & 0x08) != 0 ? "ON" : "OFF";
+
+                    // ADCs scaled 0–5V
+                    adc1Voltage = (ioBytes[1] & 0xFF) * 5.0 / 255.0;
+                    adc2Voltage = (ioBytes[2] & 0xFF) * 5.0 / 255.0;
                 }
             }
 
-            // Parse basic I/O from available data
+            // --- Ignition / IN1 from course/status word ---
             content.resetReaderIndex();
             boolean ignition = false;
             if (content.readableBytes() >= 19) {
@@ -661,61 +460,39 @@ public class Gt06ParsingMethods {
                 ignition = (courseStatus & 0x2000) != 0;
             }
 
-            // Populate with defaults and estimated values
-            data.put("ioHex", ioHex);
-            data.put("doorStatus", ignition ? "CLOSED" : "UNKNOWN");
-            data.put("trunkLock", "UNKNOWN");
-            data.put("fuelPercent", ignition ? 75 : 50); // Estimate based on ignition
-            data.put("fuelADC", ignition ? 768 : 512);
-            data.put("tempADC", 0x0267);
-            data.put("temperature", 25);
-            data.put("distance", 0.0);
-            data.put("motion", ignition ? "MOVING" : "STATIONARY");
-            data.put("vibration", ignition ? "NORMAL" : "NONE");
-            data.put("micStatus", "UNKNOWN");
-            data.put("speakerStatus", "UNKNOWN");
-            data.put("input1", "UNKNOWN");
-            data.put("input2", "UNKNOWN");
-            data.put("output1", "UNKNOWN");
-            data.put("output2", "UNKNOWN");
-            data.put("adc1Voltage", 0.0);
-            data.put("adc2Voltage", 0.0);
+            // --- Motion / Vibration derived from GPS speed ---
+            String motion = gpsSpeed > 1.0 ? "MOVING" : "STATIONARY";
 
-            return data;
+            // --- Build DTO ---
+            return new DeviceIOPortsDto(ioHex, ignition, motion, input2 ? "ON" : "OFF", out1, out2, adc1Voltage,
+                    adc2Voltage);
 
         } catch (Exception e) {
-            logger.error("Error parsing I/O data: {}", e.getMessage(), e);
-            return getDefaultIOData();
+            logger.error("Error parsing I/O ports: {}", e.getMessage(), e);
+            return DeviceIOPortsDto.getDefaultIOPorts();
         }
     }
 
-    /**
-     * Parse GT06 LBS (Location Based Service) data from ByteBuf content
-     * Extracts cell tower information for approximate location
-     */
-    public Map<String, Object> parseLBSData(ByteBuf content) {
-        Map<String, Object> data = new HashMap<>();
-
+    public DeviceLbsDataDto parseLBSData(ByteBuf content) {
         try {
-            content.markReaderIndex(); // mark before skipping
+            content.markReaderIndex();
 
-            String lbsHex = "";
-            int mcc = 404; // Default India MCC
-            int mnc = 45; // Default MNC
+            String lbsHex = "N/A";
+            int mcc = 0;
+            int mnc = 0;
             int lac = 0;
             int cid = 0;
 
-            // Look for LBS data in the packet (usually after GPS data)
+            // LBS usually after GPS block
             if (content.readableBytes() > 20) {
-                content.skipBytes(20); // move to where LBS starts (protocol dependent)
+                content.skipBytes(20);
 
                 if (content.readableBytes() >= 7) {
-                    // LBS format: [LAC:2][CID:2][MCC:2][MNC:1]
+                    // [LAC:2][CID:2][MCC:2][MNC:1]
                     byte[] lbsBytes = new byte[7];
                     content.readBytes(lbsBytes);
-                    lbsHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(lbsBytes));
+                    lbsHex = ByteBufUtil.hexDump(lbsBytes);
 
-                    // Parse fields
                     lac = ((lbsBytes[0] & 0xFF) << 8) | (lbsBytes[1] & 0xFF);
                     cid = ((lbsBytes[2] & 0xFF) << 8) | (lbsBytes[3] & 0xFF);
                     mcc = ((lbsBytes[4] & 0xFF) << 8) | (lbsBytes[5] & 0xFF);
@@ -723,7 +500,7 @@ public class Gt06ParsingMethods {
                 }
             }
 
-            // Reset and extract satellite count to estimate signal
+            // Reset & get satellites for signal estimation
             content.resetReaderIndex();
             int satellites = 0;
             if (content.readableBytes() > 7) {
@@ -733,324 +510,112 @@ public class Gt06ParsingMethods {
 
             int rssi = satellites > 4 ? -65 : satellites > 2 ? -75 : -85;
 
-            // Estimate rough LBS coordinates (dummy fallback)
-            double lbsLat = 24.8 + (lac % 100) / 1000.0;
-            double lbsLon = 74.6 + (cid % 100) / 1000.0;
-
-            // Populate data map
-            data.put("lbsHex", lbsHex);
-            data.put("mcc", mcc);
-            data.put("countryName", mcc == 404 ? "India" : "Unknown");
-            data.put("mnc", mnc);
-            data.put("operatorName", getOperatorName(mcc, mnc));
-            data.put("lac", lac);
-            data.put("cid", cid);
-            data.put("rssi", rssi);
-            data.put("towerCount", Math.max(1, satellites / 3));
-            data.put("networkType", "2G");
-            data.put("roaming", false);
-            data.put("callStatus", "Idle");
-            data.put("smsPending", 0);
-            data.put("lbsLatitude", lbsLat);
-            data.put("lbsLongitude", lbsLon);
-
-            return data;
+            return new DeviceLbsDataDto(lbsHex, mcc, mnc, lac, cid, rssi);
 
         } catch (Exception e) {
             logger.error("Error parsing LBS data: {}", e.getMessage(), e);
-            return getDefaultLBSData();
+            return DeviceLbsDataDto.getDefaultDeviceLbsData();
         }
     }
 
-    /**
-     * Parse GT06 alarm and event flags from ByteBuf content
-     * Extracts various alarm states from status bits
-     */
-    public Map<String, Object> parseAlarms(ByteBuf content) {
-        Map<String, Object> data = new HashMap<>();
+    public AlarmStatusDto parseAlarms(ByteBuf content) {
+        // Configurable thresholds
+        final int OVERSPEED_THRESHOLD = 80; // km/h
 
         try {
-            content.resetReaderIndex();
+            // 1. Mark reader index to reset after reading course/status
+            content.markReaderIndex();
 
-            String alarmHex = "00000000";
-            int alarmBits = 0;
+            // 2. Read course/status word (contains SOS, vibration, tamper, low-battery
+            // bits)
+            String alarmHex = "0000";
             int courseStatus = 0;
-
-            // Extract alarm data from course/status word
             if (content.readableBytes() >= 19) {
                 content.skipBytes(17);
                 courseStatus = content.readUnsignedShort();
                 alarmHex = String.format("%04X", courseStatus);
-                alarmBits = courseStatus;
             }
 
-            // Parse individual alarm flags from status bits
-            boolean sosAlarm = (alarmBits & 0x0004) != 0;
-            boolean vibrationAlarm = (alarmBits & 0x0008) != 0;
-            boolean powerCutAlarm = (alarmBits & 0x1000) == 0 && (alarmBits & 0x2000) != 0;
-            boolean overSpeedAlarm = false; // Would need speed threshold comparison
-            boolean geoFenceAlarm = false; // Would need geo-fence boundary check
-            boolean tamperAlarm = (alarmBits & 0x0020) != 0;
-            boolean lowBatteryAlarm = (alarmBits & 0x0040) != 0;
+            // 3. Decode supported alarm flags
+            boolean sosAlarm = (courseStatus & 0x0004) != 0;
+            boolean vibrationAlarm = (courseStatus & 0x0008) != 0;
+            boolean tamperAlarm = (courseStatus & 0x0020) != 0;
+            boolean lowBatteryAlarm = (courseStatus & 0x0040) != 0;
 
-            // Get speed for overspeed check
+            // 4. Reset and read speed for overspeed and idle detection
             content.resetReaderIndex();
             int speed = 0;
             if (content.readableBytes() >= 17) {
                 content.skipBytes(16);
                 speed = content.readUnsignedByte();
             }
-            overSpeedAlarm = speed > 80; // 80 km/h threshold
-
-            // Get ignition state for idle alarm
+            boolean overSpeedAlarm = speed > OVERSPEED_THRESHOLD;
             boolean ignition = (courseStatus & 0x2000) != 0;
             boolean idleAlarm = ignition && speed == 0;
 
-            // Populate alarm data map
-            data.put("alarmHex", alarmHex);
-            data.put("sosAlarm", sosAlarm);
-            data.put("vibrationAlarm", vibrationAlarm);
-            data.put("powerCutAlarm", powerCutAlarm);
-            data.put("fuelCutRelay", false); // GT06 basic doesn't have fuel cut
-            data.put("geoFenceAlarm", geoFenceAlarm);
-            data.put("overSpeedAlarm", overSpeedAlarm);
-            data.put("tamperAlarm", tamperAlarm);
-            data.put("idleAlarm", idleAlarm);
-            data.put("simRemoveAlarm", false);
-            data.put("lowBatteryAlarm", lowBatteryAlarm);
-            data.put("towAlarm", false);
-            data.put("harshDrivingAlarm", false);
-            data.put("coldStartAlarm", false);
-            data.put("overheatAlarm", false);
-            data.put("doorAlarm", false);
-            data.put("blindAreaAlarm", false);
-            data.put("gpsJammingAlarm", false);
-            data.put("gsmJammingAlarm", false);
-            data.put("deviceFaultAlarm", false);
-
-            return data;
-
+            // 5. Build and return DTO with only GT06-supported alarms
+            return new AlarmStatusDto(alarmHex, sosAlarm, vibrationAlarm, tamperAlarm, lowBatteryAlarm, overSpeedAlarm,
+                    idleAlarm);
         } catch (Exception e) {
-            logger.error("Error parsing alarm data: {}", e.getMessage(), e);
-            return getDefaultAlarmData();
+            logger.error("Error parsing GT06 alarm data: {}", e.getMessage(), e);
+            return AlarmStatusDto.getDefaultStatus();
         }
     }
 
-    /**
-     * Parse GT06 extended features from ByteBuf content
-     * Basic GT06 has limited extended features
-     */
-    public Map<String, Object> parseExtendedFeatures(ByteBuf content) {
-        Map<String, Object> data = new HashMap<>();
-
+    public DeviceExtendedFeatureDto parseExtendedFeatures(ByteBuf content) {
         try {
+            // 1. Reset reader index and skip to feature field
             content.resetReaderIndex();
-
-            String featureHex = "";
+            String featureHex = "0000";
             if (content.readableBytes() > 24) {
                 content.skipBytes(24);
                 if (content.readableBytes() >= 2) {
-                    byte[] featureBytes = new byte[Math.min(2, content.readableBytes())];
+                    byte[] featureBytes = new byte[2];
                     content.readBytes(featureBytes);
                     featureHex = ByteBufUtil.hexDump(Unpooled.wrappedBuffer(featureBytes));
                 }
             }
 
-            // GT06 basic features (mostly defaults for basic model)
-            data.put("featureHex", featureHex);
-            data.put("voiceMonitoring", false);
-            data.put("twoWayCall", false);
-            data.put("remoteListen", false);
-            data.put("smsCommands", true); // GT06 supports SMS commands
-            data.put("sleepMode", false);
-            data.put("uploadInterval", 30); // Default 30 seconds
-            data.put("distanceUpload", 200);
-            data.put("heartbeatInterval", 300);
-            data.put("wifiScan", false); // Basic GT06 doesn't have WiFi
-            data.put("cellScanCount", 1);
-            data.put("encryption", "None");
-            data.put("storage1", 0); // Basic GT06 has no storage
-            data.put("storage2", 0);
-            data.put("storagePoints", 0);
-            data.put("backupMode", "SMS");
-            data.put("precision", 10); // ~10m accuracy
+            // 2. Default/configurable values for supported GT06/GT06N features
+            boolean smsCommands = true; // Always supported
+            int uploadInterval = 30; // seconds
+            int distanceUpload = 200; // meters
+            int heartbeatInterval = 300; // seconds
+            int cellScanCount = 1; // basic model
+            String backupMode = "SMS"; // fallback mode
+            boolean sleepMode = false; // basic model does not sleep
 
-            return data;
-
+            // 3. Construct and return DTO with only supported fields
+            return new DeviceExtendedFeatureDto(featureHex, smsCommands, uploadInterval, distanceUpload,
+                    heartbeatInterval, cellScanCount, backupMode, sleepMode);
         } catch (Exception e) {
-            logger.error("Error parsing extended features: {}", e.getMessage(), e);
-            return getDefaultFeatureData();
+            logger.error("Error parsing GT06/GT06N extended features: {}", e.getMessage(), e);
+            return DeviceExtendedFeatureDto.getDefaultFeatures();
         }
     }
 
-    // Helper methods for default data and text conversion
-
-    public Map<String, Object> getDefaultLocationData() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("locationHex", "");
-        data.put("deviceTime", "1970-01-01T00:00:00Z");
-        data.put("latitudeAbs", 0.0);
-        data.put("latDirection", "N");
-        data.put("longitudeAbs", 0.0);
-        data.put("lonDirection", "E");
-        data.put("latitude", 0.0);
-        data.put("longitude", 0.0);
-        data.put("speed", 0);
-        data.put("heading", 0);
-        data.put("satellites", 0);
-        data.put("altitude", 0.0);
-        data.put("accuracy", 50.0);
-        data.put("hdop", 5.0);
-        data.put("pdop", 5.0);
-        data.put("vdop", 5.0);
-        data.put("fixType", "No Fix");
-        data.put("serial", 0);
-        data.put("gpsValid", false);
-        data.put("gpsMode", "Auto");
-        return data;
-    }
-
-    public Map<String, Object> getDefaultDeviceStatus() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("statusHex", "");
-        data.put("ignition", false);
-        data.put("accRaw", 0);
-        data.put("batteryVoltage", 3700);
-        data.put("batteryPercent", 50);
-        data.put("externalPower", false);
-        data.put("powerCut", false);
-        data.put("charging", false);
-        data.put("temperature", 25);
-        data.put("tempADC", 0x0267);
-        data.put("odometer", 0.0);
-        data.put("runtimeHours", 0);
-        data.put("runtimeMins", 0);
-        data.put("runtimeSecs", 0);
-        data.put("gsmSignal", -85);
-        data.put("signalLevel", 2);
-        data.put("firmware", "GT06-v1.0");
-        data.put("hardware", "GT06-Basic");
-        data.put("statusBits", 0);
-        data.put("batteryLevel", 3);
-        data.put("batteryLevelText", "Normal");
-        data.put("voltageLevel", 3);
-        data.put("voltageLevelText", "Normal");
-        data.put("engineRunning", false);
-        return data;
-    }
-
-    public Map<String, Object> getDefaultIOData() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("ioHex", "");
-        data.put("doorStatus", "UNKNOWN");
-        data.put("trunkLock", "UNKNOWN");
-        data.put("fuelPercent", 0);
-        data.put("fuelADC", 0);
-        data.put("tempADC", 0x0267);
-        data.put("temperature", 25);
-        data.put("distance", 0.0);
-        data.put("motion", "UNKNOWN");
-        data.put("vibration", "UNKNOWN");
-        data.put("micStatus", "UNKNOWN");
-        data.put("speakerStatus", "UNKNOWN");
-        data.put("input1", "UNKNOWN");
-        data.put("input2", "UNKNOWN");
-        data.put("output1", "UNKNOWN");
-        data.put("output2", "UNKNOWN");
-        data.put("adc1Voltage", 0.0);
-        data.put("adc2Voltage", 0.0);
-        return data;
-    }
-
-    public Map<String, Object> getDefaultLBSData() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("lbsHex", "");
-        data.put("mcc", 0);
-        data.put("countryName", "Unknown");
-        data.put("mnc", 0);
-        data.put("operatorName", "Unknown");
-        data.put("lac", 0);
-        data.put("cid", 0);
-        data.put("rssi", -95);
-        data.put("towerCount", 0);
-        data.put("networkType", "Unknown");
-        data.put("roaming", false);
-        data.put("callStatus", "Unknown");
-        data.put("smsPending", 0);
-        data.put("lbsLatitude", 0.0);
-        data.put("lbsLongitude", 0.0);
-        return data;
-    }
-
-    public Map<String, Object> getDefaultAlarmData() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("alarmHex", "0000");
-        data.put("sosAlarm", false);
-        data.put("vibrationAlarm", false);
-        data.put("powerCutAlarm", false);
-        data.put("fuelCutRelay", false);
-        data.put("geoFenceAlarm", false);
-        data.put("overSpeedAlarm", false);
-        data.put("tamperAlarm", false);
-        data.put("idleAlarm", false);
-        data.put("simRemoveAlarm", false);
-        data.put("lowBatteryAlarm", false);
-        data.put("towAlarm", false);
-        data.put("harshDrivingAlarm", false);
-        data.put("coldStartAlarm", false);
-        data.put("overheatAlarm", false);
-        data.put("doorAlarm", false);
-        data.put("blindAreaAlarm", false);
-        data.put("gpsJammingAlarm", false);
-        data.put("gsmJammingAlarm", false);
-        data.put("deviceFaultAlarm", false);
-        return data;
-    }
-
-    public Map<String, Object> getDefaultFeatureData() {
-        Map<String, Object> data = new HashMap<>();
-        data.put("featureHex", "");
-        data.put("voiceMonitoring", false);
-        data.put("twoWayCall", false);
-        data.put("remoteListen", false);
-        data.put("smsCommands", true);
-        data.put("sleepMode", false);
-        data.put("uploadInterval", 30);
-        data.put("distanceUpload", 200);
-        data.put("heartbeatInterval", 300);
-        data.put("wifiScan", false);
-        data.put("cellScanCount", 0);
-        data.put("encryption", "None");
-        data.put("storage1", 0);
-        data.put("storage2", 0);
-        data.put("storagePoints", 0);
-        data.put("backupMode", "SMS");
-        data.put("precision", 10);
-        return data;
-    }
-
-    public String getBatteryLevelText(int percent) {
-        if (percent >= 80)
+    private String getBatteryLevelText(int batteryPercent) {
+        if (batteryPercent > 80)
+            return "Full";
+        if (batteryPercent > 60)
             return "High";
-        if (percent >= 60)
-            return "Good";
-        if (percent >= 40)
-            return "Normal";
-        if (percent >= 20)
+        if (batteryPercent > 40)
+            return "Medium";
+        if (batteryPercent > 20)
             return "Low";
         return "Critical";
     }
 
-    public String getVoltageLevelText(int voltage) {
-        if (voltage >= 4000)
-            return "High";
-        if (voltage >= 3800)
+    private String getVoltageLevelText(int voltage) {
+        if (voltage > 4100)
+            return "Excellent";
+        if (voltage > 3900)
             return "Good";
-        if (voltage >= 3600)
+        if (voltage > 3700)
             return "Normal";
-        if (voltage >= 3400)
-            return "Low";
-        return "Critical";
+        if (voltage > 3500)
+            return "Weak";
+        return "Very Weak";
     }
 
     public String getOperatorName(int mcc, int mnc) {

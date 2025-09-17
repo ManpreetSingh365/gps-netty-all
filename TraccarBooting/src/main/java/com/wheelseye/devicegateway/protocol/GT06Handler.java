@@ -8,6 +8,7 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.web.WebProperties.Resources.Chain.Strategy.Fixed;
 import org.springframework.stereotype.Component;
 
 import com.wheelseye.devicegateway.config.KafkaAdapter;
@@ -15,10 +16,14 @@ import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
 import com.wheelseye.devicegateway.domain.valueobjects.Location;
 import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
+import com.wheelseye.devicegateway.dto.AlarmStatusDto;
+import com.wheelseye.devicegateway.dto.DeviceExtendedFeatureDto;
+import com.wheelseye.devicegateway.dto.DeviceIOPortsDto;
+import com.wheelseye.devicegateway.dto.DeviceLbsDataDto;
+import com.wheelseye.devicegateway.dto.DeviceStatusDto;
 import com.wheelseye.devicegateway.dto.LocationDto;
 import com.wheelseye.devicegateway.helper.Gt06ParsingMethods;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
-// import com.wheelseye.devicegateway.service.TelemetryProcessingService;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -361,54 +366,57 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
      */
     private void handleLocationPacket(ChannelHandlerContext ctx, MessageFrame frame) {
         String remoteAddress = ctx.channel().remoteAddress().toString();
-
         Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
         if (sessionOpt.isEmpty()) {
             logger.warn("❌ No authenticated session for location from {}", remoteAddress);
             return;
         }
-
         try {
             DeviceSession session = sessionOpt.get();
             String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
-            
             String sid = session.getId() != null ? session.getId() : "unknown-id";
-            logger.info("📍 Processing location packet for IMEI: {}", imei);
-
-            // Parse and display location immediately
-            LocationDto location = gt06ParsingMethods.parseLocation(frame.getContent());
             
-
-            if (location != null) {
-                // IMMEDIATE location display
-                var protoLocation =  LocationMapper.toProto(location);
-                if(protoLocation != null){
-                   kafkaAdapter.sendMessage("location.device", sid, protoLocation.toByteArray());
-                    logger.info("📍 Got location packet for IMEI: {}", imei);
+            // Check if this is actually a GPS location packet
+            int protocol = frame.getProtocolNumber();
+            boolean isGpsLocationPacket = (protocol == 0x12 || protocol == 0x22 || protocol == 0x94);
+            
+            if (isGpsLocationPacket) {
+                logger.info("📍 Processing GPS location packet (0x{:02X}) for IMEI: {}", protocol, imei);
+                
+                // Only parse location data for actual GPS packets
+                LocationDto location = gt06ParsingMethods.parseLocation(frame.getContent());
+                
+                if (location != null) {
+                    // IMMEDIATE location display
+                    var protoLocation = LocationMapper.toProto(location);
+                    if (protoLocation != null) {
+                        kafkaAdapter.sendMessage("location.device", sid, protoLocation.toByteArray());
+                        logger.info("📍 Got location packet for IMEI: {}", imei);
+                    }
+                    session.markLocationDataReceived();
+                } else {
+                    logger.warn("❌ Failed to parse location data for IMEI: {} - Raw data: {}",
+                            imei, ByteBufUtil.hexDump(frame.getContent()));
                 }
-                // logLocationDataEnhanced(location, imei, remoteAddress, frame.getProtocolNumber());
-                logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame.getProtocolNumber());
-                session.markLocationDataReceived();
             } else {
-                logger.warn("❌ Failed to parse location data for IMEI: {} - Raw data: {}",
-                        imei, ByteBufUtil.hexDump(frame.getContent()));
-
-                // Try logDeviceReport with complete device status, location data, LBS info, alarms, and debugging data.
-                logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame.getProtocolNumber());
+                // Handle non-GPS packets (status, heartbeat, etc.)
+                logger.info("📊 Processing status packet (0x{:02X}) for IMEI: {}", protocol, imei);
             }
-
-            // KAFKA DISABLED - Only local processing
-            logger.info("📍 Location processed locally (Kafka disabled as requested) for IMEI: {}", imei);
-
+            
+            // Always log device report for debugging (but don't parse as location)
+            logDeviceReport(ctx, frame.getContent(), imei, remoteAddress, frame);
+            
+            logger.info("📍 Packet processed locally (Kafka disabled as requested) for IMEI: {}", imei);
             session.updateActivity();
             sessionService.saveSession(session);
             sendGenericAck(ctx, frame);
-
+            
         } catch (Exception e) {
-            logger.error("💥 Error handling location from {}: {}", remoteAddress, e.getMessage(), e);
+            logger.error("💥 Error handling packet from {}: {}", remoteAddress, e.getMessage(), e);
             sendGenericAck(ctx, frame);
         }
     }
+
 
     /**
      * FIXED: Log device report with complete device status, location data, LBS info, alarms, and debugging data.
@@ -422,7 +430,7 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
      * FIXED: Ensure all data is properly displayed and logged.
      * 
       */
-private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String imei, String remoteAddress, int protocolNumber) {
+private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String imei, String remoteAddress, MessageFrame frame) {
     try {
         content.resetReaderIndex();
         String fullRawPacket = ByteBufUtil.hexDump(content);
@@ -430,96 +438,89 @@ private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String 
         int frameLen = content.readableBytes();
 
         // Parse all data sections
-        // Map<String, Object> locationData = gt06ParsingMethods.parseLocationData(content);
-                LocationDto location = gt06ParsingMethods.parseLocation(content);
+        LocationDto location = gt06ParsingMethods.parseLocation(content);
+        DeviceStatusDto deviceStatus = gt06ParsingMethods.parseDeviceStatus(content);
+        DeviceIOPortsDto ioData = gt06ParsingMethods.parseIOPorts(content, location.speed());
+        DeviceLbsDataDto lbs = gt06ParsingMethods.parseLBSData(content);
+        AlarmStatusDto alarmData = gt06ParsingMethods.parseAlarms(content);
+        DeviceExtendedFeatureDto featureData = gt06ParsingMethods.parseExtendedFeatures(content);
 
-        Map<String, Object> deviceStatus = gt06ParsingMethods.parseDeviceStatus(content);
-        Map<String, Object> ioData = gt06ParsingMethods.parseIOPorts(content);
-        Map<String, Object> lbsData = gt06ParsingMethods.parseLBSData(content);
-        Map<String, Object> alarmData = gt06ParsingMethods.parseAlarms(content);
-        Map<String, Object> featureData = gt06ParsingMethods.parseExtendedFeatures(content);
-
-        // Extract coordinates
-        // double lat = ((Number) locationData.getOrDefault("latitude", 0.0)).doubleValue();
-        // double lon = ((Number) locationData.getOrDefault("longitude", 0.0)).doubleValue();
-
-        // ====================================================================
         logger.info("📡 Device Report Log ===========================================>");
-
-        // 🕒 TIMESTAMP SECTION
-        logger.info("🕒 Timestamp ----->");
+        // 🕒 TIMESTAMP SECTION -------------------->
+        logger.info("🕒 Timestamp -------------------->");
         logger.info("   📩 Server Time : {}", serverTimestamp);
         logger.info("   📡 RemoteAddress : {}", remoteAddress);
-        logger.info("   📡 IMEI        : {}", imei);
-        logger.info("   📦 Protocol    : 0x{} (GPS+LBS Report)", String.format("%02X", protocolNumber));
-        logger.info("   🔑 Raw Packet  : {}", fullRawPacket);
-        logger.info("   📏 FrameLen    : {}   | Checksum : ✅ OK   | Parser : gt06-v2.1   | Duration : {}ms", 
-                frameLen, System.currentTimeMillis() % 100);
-
-        // 🌍 LOCATION DATA
-        logger.info("🌍 Location Data ----->");
+        logger.info("   📡 IMEI        : {}", imei);       
+        logger.info("   📦 Protocol      : 0x{} ({})", String.format("%02X", frame.getProtocolNumber()), protocolName(frame.getProtocolNumber()));  
+        logger.info("   🔑 Raw Packet    : {}", fullRawPacket);
+        logger.info("   📏 FrameLen      : {}   | Checksum : ✅ OK  | Duration : {}ms ", frameLen, System.currentTimeMillis() % 100);        
+        
+        // 🌍 LOCATION DATA -------------------->
+        logger.info("🌍 Location Data -------------------->");
         logger.info("   🗓️ PktTime     : {}", location.timestamp());
-        logger.info(String.format("   📍 Lat/Lon     : %.6f° , %.6f°", location.latitude(), location.longitude()));
+        logger.info(String.format("   📍 Lat/Lon     : %.6f° %s , %.6f° %s", Math.abs(location.latitude()), location.latitude() >= 0 ? "N" : "S", Math.abs(location.longitude()), location.longitude() >= 0 ? "E" : "W"));
         logger.info("   🚗 Speed       : {} km/h      🧭 Heading : {}°", location.speed(), location.course());
         logger.info("   🛰️ Satellites : {}", location.satellites());
+        // Accuracy (~ meters) → ❌ Not in GT06 packet (server usually estimates from satellite count).
         logger.info("   🎯 Accuracy    : ~{} m", location.accuracy());
         logger.info("   🔄 GPS Status  : {}", location.gpsValid() ? "Valid" : "Invalid");
+        // Fix Type (2D/3D) → Derived from satellites count, not raw in packet.
+        logger.info("   🔄 Fix Type    : {}", location.satellites() >= 4 ? "3D Fix" : (location.satellites() >= 2 ? "2D Fix" : "No Fix"));
+        logger.info("   #️⃣ Serial     : {}           🏷️ Event : Normal Tracking (0x{})",  frame.getSerialNumber(),  String.format("%02X", frame.getProtocolNumber()));
 
+        // 🔋 DEVICE STATUS -------------------->
+        logger.info("🔋 Device Status -------------------->");
+        logger.info("   🗃️ Packet      : 0x{}", Integer.toHexString(deviceStatus.statusBits()));
+        logger.info("   🔑 Ignition    : {} (ACC={})   🔦 ACC Line : {}", deviceStatus.ignition() ? "ON" : "OFF", deviceStatus.accRaw(), deviceStatus.ignition() ? "Active" : "Inactive");
+        logger.info("   🔌 Battery     : {} mV ({} V, {}%)   🔋 Ext Power : {}", deviceStatus.batteryVoltage(), String.format("%.1f", deviceStatus.batteryVoltage() / 1000.0), deviceStatus.batteryPercent(), deviceStatus.externalPower() ? "Connected" : "Disconnected");
+        logger.info("   ⚡ Charging    : {} {}", deviceStatus.charging() ? "✅" : "❌", deviceStatus.charging() ? "Yes" : "No");
+        logger.info("   📡 GSM Signal  : {} dBm   📶 Level : {}", deviceStatus.gsmSignal(), deviceStatus.signalLevel());
+        logger.info("   🛰️ GPS Fixed   : {}   🧭 Direction : {}°   🛰️ Satellites : {}", deviceStatus.gpsFixed() ? "Yes" : "No", deviceStatus.direction(), deviceStatus.satellites());
+        logger.info("   🔋 Battery Lvl : {}   🔌 Voltage Lvl : {}", deviceStatus.batteryLevelText(), deviceStatus.voltageLevelText());
 
-        // logger.info("   🗃️ Packet      : {}", locationData.getOrDefault("locationHex", ""));
-        // logger.info("   🗓️ PktTime     : {}", locationData.getOrDefault("deviceTime", ""));
-        // logger.info(String.format("   📍 Lat/Lon     : %.6f° %s , %.6f° %s",
-        //         ((Number) locationData.getOrDefault("latitudeAbs", 0.0)).doubleValue(),
-        //         locationData.getOrDefault("latDirection", "N"),
-        //         ((Number) locationData.getOrDefault("longitudeAbs", 0.0)).doubleValue(),
-        //         locationData.getOrDefault("lonDirection", "E")));
-        // logger.info("   🚗 Speed       : {} km/h      🧭 Heading : {}°", 
-        //         locationData.getOrDefault("speed", 0),
-        //         locationData.getOrDefault("heading", 0));
-        // logger.info("   🛰️ Satellites : {}           📏 Altitude : {} m", 
-        //         locationData.getOrDefault("satellites", 0),
-        //         locationData.getOrDefault("altitude", 0.0));
-        // logger.info("   🎯 Accuracy    : ~{} m (HDOP={}, PDOP={}, VDOP={})", 
-        //         locationData.getOrDefault("accuracy", 0),
-        //         locationData.getOrDefault("hdop", 0.0),
-        //         locationData.getOrDefault("pdop", 0.0),
-        //         locationData.getOrDefault("vdop", 0.0));
-        // logger.info("   🔄 Fix Type    : {}        🗺️ Coord Type : WGS84", 
-        //         locationData.getOrDefault("fixType", "3D Fix"));
-        // logger.info("   #️⃣ Serial     : {}           🏷️ Event : Normal Tracking (0x{})", 
-        //         locationData.getOrDefault("serial", 0),
-        //         String.format("%02X", protocolNumber));
-        // logger.info("   🔄 GPS Status  : {} ({})", 
-        //         getBooleanValue(locationData, "gpsValid") ? "Valid" : "Invalid",
-        //         locationData.getOrDefault("gpsMode", "Auto"));
+        // 🔌 Device I/O Ports -------------------->
+        logger.info(" 🔌 Device I/O Ports -------------------->");    
+        logger.info("   🗃️ I/O Hex       : {}", ioData.ioHex());
+        logger.info("   🔑 IN1 / Ignition : {}", ioData.ignition() ? "ON ✅" : "OFF ❌");
+        logger.info("   🛰️ Motion        : {}", ioData.motion());
+        logger.info("   🔌 IN2           : {}", ioData.input2());
+        logger.info("   🔌 OUT1 (Relay)  : {}", ioData.out1());
+        logger.info("   🔌 OUT2 (Relay)  : {}", ioData.out2());
+        logger.info("   ⚡ ADC1 Voltage  : {} V", ioData.adc1Voltage() != null ? String.format("%.2f", ioData.adc1Voltage()) : "N/A");
+        logger.info("   ⚡ ADC2 Voltage  : {} V", ioData.adc2Voltage() != null ? String.format("%.2f", ioData.adc2Voltage()) : "N/A");
 
-        // 🔋 DEVICE STATUS
-        logger.info("🔋 Device Status ----->");
-        logger.info("   🗃️ Packet      : {}", deviceStatus.getOrDefault("statusHex", ""));
-        logger.info("   🔑 Ignition    : {} (ACC={})   🔦 ACC Line : {}", 
-                getBooleanValue(deviceStatus, "ignition") ? "ON" : "OFF",
-                deviceStatus.getOrDefault("accRaw", 0),
-                getBooleanValue(deviceStatus, "ignition") ? "Active" : "Inactive");
-        int batteryVoltage = ((Number) deviceStatus.getOrDefault("batteryVoltage", 0)).intValue();
-        logger.info("   🔌 Battery     : {} mV ({} V, {}%)   🔋 Ext Power : {}", 
-                batteryVoltage,
-                String.format("%.1f", batteryVoltage / 1000.0),
-                deviceStatus.getOrDefault("batteryPercent", 0),
-                getBooleanValue(deviceStatus, "externalPower") ? "Connected" : "Disconnected");
-        logger.info("   ⚡ PowerCut    : {} {}         🔦 Charging : {} {}", 
-                getBooleanValue(deviceStatus, "powerCut") ? "✅" : "❌",
-                getBooleanValue(deviceStatus, "powerCut") ? "Yes" : "No",
-                getBooleanValue(deviceStatus, "charging") ? "✅" : "❌",
-                getBooleanValue(deviceStatus, "charging") ? "Yes" : "No");
+        // 📡 LBS Data -------------------->
+        logger.info("📡 LBS Data -------------------->");
+        logger.info("   🗃️ Raw Hex    : {}", lbs.lbsHex());
+        logger.info("   🌐 MCC        : {}", lbs.mcc());
+        logger.info("   📶 MNC        : {}", lbs.mnc());
+        logger.info("   🗼 LAC        : {}", lbs.lac());
+        logger.info("   🗼 CID        : {}", lbs.cid());
+        logger.info("   📡 RSSI       : {} dBm", lbs.rssi());
+        
+        // 🚨 Alarm Data -------------------->
+        logger.info("🚨 GT06 Alarm Data -------------------->");
+        logger.info("   🗃️ Raw Hex          : 0x{}", alarmData.alarmHex());
+        logger.info("   🆘 SOS Alarm        : {}", alarmData.sosAlarm() ? "TRIGGERED" : "OFF");
+        logger.info("   💥 Vibration Alarm  : {}", alarmData.vibrationAlarm() ? "TRIGGERED" : "OFF");
+        logger.info("   🛠️ Tamper Alarm     : {}", alarmData.tamperAlarm() ? "TRIGGERED" : "OFF");
+        logger.info("   🔋 Low Battery      : {}", alarmData.lowBatteryAlarm() ? "TRIGGERED" : "OK");
+        logger.info("   ⚡ Over-speed Alarm : {}", alarmData.overSpeedAlarm() ? "YES" : "NO");
+        logger.info("   🅿️ Idle Alarm       : {}", alarmData.idleAlarm() ? "ACTIVE" : "OFF");
+        
+        // ⚙️ GT06 Extended Features -------------------->
+        logger.info("⚙️ GT06 Extended Features -------------------->");
+        logger.info("   🗃️ Raw Hex            : 0x{}", featureData.featureHex());
+        logger.info("   📩 SMS Commands       : {}", featureData.smsCommands() ? "SUPPORTED" : "NOT SUPPORTED");
+        logger.info("   😴 Sleep Mode         : {}", featureData.sleepMode() ? "ACTIVE" : "OFF");
+        logger.info("   ⏱️ Upload Interval    : {} sec", featureData.uploadInterval());
+        logger.info("   📏 Distance Upload    : {} meters", featureData.distanceUpload());
+        logger.info("   ❤️ Heartbeat Interval : {} sec", featureData.heartbeatInterval());
+        logger.info("   📶 Cell Scan Count    : {}", featureData.cellScanCount());
+        logger.info("   📨 Backup Mode        : {}", featureData.backupMode());
 
-        logger.info(String.format("   🛣️ Odometer   : %,d km   ⏱️ Runtime : %02dh:%02dm:%02ds",
-                ((Number) deviceStatus.getOrDefault("odometer", 0)).intValue(),
-                ((Number) deviceStatus.getOrDefault("runtimeHours", 0)).intValue(),
-                ((Number) deviceStatus.getOrDefault("runtimeMins", 0)).intValue(),
-                ((Number) deviceStatus.getOrDefault("runtimeSecs", 0)).intValue()));
-
-        // 🗺️ MAP LINKS
-        logger.info("🗺️ Map Links ----->");
+        // 🗺️ MAP LINKS -------------------->
+        logger.info("🗺️ Map Links -------------------->");
         logger.info(String.format("   🔗 Google Maps   : https://www.google.com/maps/search/?api=1&query=%.6f,%.6f", location.latitude(), location.longitude()));
         logger.info(String.format("   🔗 OpenStreetMap : https://www.openstreetmap.org/?mlat=%.6f&mlon=%.6f#map=16/%.6f/%.6f", location.latitude(), location.longitude(), location.latitude(), location.longitude()));
 
@@ -529,6 +530,30 @@ private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String 
         logger.error("💥 Enhanced GT06 parsing error for IMEI {}: {}", imei, e.getMessage(), e);
     }
 }
+
+
+    /**
+     * Map GT06 protocol number → human-readable name.
+     * Covers Login, Location, Status, Alarm, LBS, Command, Heartbeat, etc.
+     */
+    private String protocolName(int proto) {
+        return switch (proto) {
+            case 0x01 -> "Login";
+            case 0x05 -> "Heartbeat";
+            case 0x08 -> "GPS Location (old type)";
+            case 0x10 -> "LBS Location";
+            case 0x12 -> "GPS Location (0x12 type)";
+            case 0x13 -> "Status Info";
+            case 0x15 -> "String Information";
+            case 0x16 -> "Alarm Packet";
+            case 0x1A -> "Extended Status Info";
+            case 0x80 -> "Command Response (0x80)";
+            case 0x8A -> "Command Response (0x8A)";
+            case 0x94 -> "GPS Location (0x94 type)";
+            case 0x97 -> "OBD / Extended Data (some models)";
+            default -> String.format("Unknown (0x%02X)", proto);
+        };
+    }
 
 private boolean getBooleanValue(Map<String, Object> map, String key) {
     Object value = map.get(key);
