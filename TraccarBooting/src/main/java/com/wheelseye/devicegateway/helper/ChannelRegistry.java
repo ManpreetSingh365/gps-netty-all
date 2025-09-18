@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.protocol;
+package com.wheelseye.devicegateway.helper;
 
 import io.netty.channel.Channel;
 

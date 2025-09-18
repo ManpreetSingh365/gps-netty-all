@@ -8,8 +8,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Repository;
-import com.wheelseye.devicegateway.domain.entities.DeviceSession;
-import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
+
+import com.wheelseye.devicegateway.model.DeviceSession;
+import com.wheelseye.devicegateway.model.IMEI;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
@@ -89,7 +90,7 @@ public class RedisSessionRepository {
         public static SessionData fromDeviceSession(DeviceSession session) {
             return new SessionData(
                 session.getId(),
-                session.getImei() != null ? session.getImei().getValue() : null,
+                session.getImei() != null ? session.getImei().value() : null,
                 session.getChannelId(),
                 session.getCreatedAt(),
                 session.getLastActivityAt(),
@@ -157,7 +158,7 @@ public class RedisSessionRepository {
             
             // Index by IMEI
             if (session.getImei() != null) {
-                String imeiKey = IMEI_SESSION_PREFIX + session.getImei().getValue();
+                String imeiKey = IMEI_SESSION_PREFIX + session.getImei().value();
                 redisTemplate.opsForValue().set(imeiKey, session.getId(), SESSION_TTL_SECONDS, TimeUnit.SECONDS);
             }
             
@@ -234,11 +235,11 @@ public class RedisSessionRepository {
      */
     public Optional<DeviceSession> findByImei(IMEI imei) {
         try {
-            String imeiKey = IMEI_SESSION_PREFIX + imei.getValue();
+            String imeiKey = IMEI_SESSION_PREFIX + imei.value();
             Object sessionIdObj = redisTemplate.opsForValue().get(imeiKey);
             
             if (sessionIdObj == null) {
-                logger.debug("📭 No session found for IMEI: {}", imei.getValue());
+                logger.debug("📭 No session found for IMEI: {}", imei.value());
                 return Optional.empty();
             }
             
@@ -246,7 +247,7 @@ public class RedisSessionRepository {
             return findById(sessionId);
             
         } catch (Exception e) {
-            logger.error("❌ Failed to find session by IMEI: {}", imei.getValue(), e);
+            logger.error("❌ Failed to find session by IMEI: {}", imei.value(), e);
             return Optional.empty();
         }
     }
@@ -270,7 +271,7 @@ public class RedisSessionRepository {
                 
                 // Remove IMEI index
                 if (session.getImei() != null) {
-                    redisTemplate.delete(IMEI_SESSION_PREFIX + session.getImei().getValue());
+                    redisTemplate.delete(IMEI_SESSION_PREFIX + session.getImei().value());
                 }
                 
                 // Remove from active sessions

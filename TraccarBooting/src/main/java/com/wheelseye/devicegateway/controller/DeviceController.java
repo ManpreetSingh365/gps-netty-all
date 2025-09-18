@@ -12,9 +12,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.wheelseye.devicegateway.domain.entities.DeviceSession;
-import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
 import com.wheelseye.devicegateway.dto.DeviceSessionDto;
+import com.wheelseye.devicegateway.model.DeviceSession;
+import com.wheelseye.devicegateway.model.IMEI;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 
 @RestController

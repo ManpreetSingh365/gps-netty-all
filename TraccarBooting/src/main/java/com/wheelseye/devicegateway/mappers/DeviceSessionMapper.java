@@ -1,7 +1,7 @@
-package com.wheelseye.devicegateway.domain.mappers;
+package com.wheelseye.devicegateway.mappers;
 
-import com.wheelseye.devicegateway.domain.entities.DeviceSession;
-import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
+import com.wheelseye.devicegateway.model.DeviceSession;
+import com.wheelseye.devicegateway.model.IMEI;
 
 import java.time.Instant;
 
@@ -12,7 +12,7 @@ public class DeviceSessionMapper {
         com.wheelseye.devicegateway.protobuf.DeviceSession.Builder builder =
                 com.wheelseye.devicegateway.protobuf.DeviceSession.newBuilder()
                         .setId(entity.getId())
-                        .setImei(com.wheelseye.devicegateway.protobuf.IMEI.newBuilder().setValue(entity.getImei().getValue()).build())
+                        .setImei(com.wheelseye.devicegateway.protobuf.IMEI.newBuilder().setValue(entity.getImei().value()).build())
                         .setChannelId(entity.getChannelId())
                         .setAuthenticated(entity.isAuthenticated())
                         .setRemoteAddress(entity.getRemoteAddress())
@@ -45,7 +45,7 @@ public class DeviceSessionMapper {
                 new IMEI(proto.getImei().getValue())
         );
 
-        entity.setImei(new com.wheelseye.devicegateway.domain.valueobjects.IMEI(proto.getImei().getValue()));
+        entity.setImei(new com.wheelseye.devicegateway.model.IMEI(proto.getImei().getValue()));
         entity.setChannelId(proto.getChannelId());
         entity.setAuthenticated(proto.getAuthenticated());
         entity.setRemoteAddress(proto.getRemoteAddress());

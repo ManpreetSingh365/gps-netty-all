@@ -1,12 +1,13 @@
 package com.wheelseye.devicegateway.messaging;
 
-import com.wheelseye.devicegateway.domain.events.DeviceSessionEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
-import com.wheelseye.devicegateway.domain.mappers.DeviceSessionEventMapper;
+
+import com.wheelseye.devicegateway.mappers.DeviceSessionEventMapper;
+import com.wheelseye.devicegateway.model.DeviceSessionEvent;
 
 @Component
 public class KafkaEventPublisher implements EventPublisher {
@@ -31,11 +32,11 @@ public class KafkaEventPublisher implements EventPublisher {
     @Override
     public void publishDeviceSessionEvent(DeviceSessionEvent event) {
         try {
-            kafkaTemplate.send(deviceSessionsTopic, event.imei().getValue(), DeviceSessionEventMapper.toProto(event).toByteArray())
+            kafkaTemplate.send(deviceSessionsTopic, event.imei().value(), DeviceSessionEventMapper.toProto(event).toByteArray())
                     .addCallback(
-                            result -> logger.debug("Published session event for IMEI: {}", event.imei().getValue()),
+                            result -> logger.debug("Published session event for IMEI: {}", event.imei().value()),
                             failure -> logger.error("Failed to publish session event for IMEI: {}",
-                                    event.imei().getValue(), failure));
+                                    event.imei().value(), failure));
         } catch (Exception e) {
             logger.error("Error publishing device session event", e);
         }

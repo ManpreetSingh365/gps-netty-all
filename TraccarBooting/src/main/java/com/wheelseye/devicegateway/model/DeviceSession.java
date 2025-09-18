@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.domain.entities;
+package com.wheelseye.devicegateway.model;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -8,7 +8,6 @@ import java.util.UUID;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
 
 import io.netty.channel.Channel;
 
@@ -16,7 +15,6 @@ import io.netty.channel.Channel;
  * Enhanced DeviceSession Entity - FULLY COMPATIBLE with your existing code
  * 
  * Key Enhancements:
- * 1. ✅ V5 device variant support (backward compatible)
  * 2. ✅ All existing constructors preserved
  * 3. ✅ Enhanced with new methods for V5 handling
  * 4. ✅ Proper Jackson annotations for Redis serialization
@@ -217,13 +215,6 @@ public class DeviceSession {
         this.statusAdviceGiven = true;
     }
 
-    /**
-     * Check if this is a V5 device
-     */
-    @JsonIgnore
-    public boolean isV5Device() {
-        return "V5".equalsIgnoreCase(deviceVariant);
-    }
 
     /**
      * Check if this is an SK05 device
@@ -333,6 +324,6 @@ public class DeviceSession {
     public String toString() {
         return String.format(
                 "DeviceSession{id='%s', imei=%s, authenticated=%s, channelId='%s', remoteAddress='%s', variant='%s'}",
-                id, imei != null ? imei.getValue() : null, authenticated, channelId, remoteAddress, deviceVariant);
+                id, imei != null ? imei.value() : null, authenticated, channelId, remoteAddress, deviceVariant);
     }
 }

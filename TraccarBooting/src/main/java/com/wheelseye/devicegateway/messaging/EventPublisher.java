@@ -1,6 +1,6 @@
 package com.wheelseye.devicegateway.messaging;
 
-import com.wheelseye.devicegateway.domain.events.DeviceSessionEvent;
+import com.wheelseye.devicegateway.model.DeviceSessionEvent;
 
 public interface EventPublisher {
     void publishDeviceSessionEvent(DeviceSessionEvent event);

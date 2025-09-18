@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.protocol;
+package com.wheelseye.devicegateway.helper;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;

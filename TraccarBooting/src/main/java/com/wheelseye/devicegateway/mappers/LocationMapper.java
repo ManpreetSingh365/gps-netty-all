@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.domain.mappers;
+package com.wheelseye.devicegateway.mappers;
 
 import com.google.protobuf.Timestamp;
 import com.wheelseye.devicegateway.dto.LocationDto;

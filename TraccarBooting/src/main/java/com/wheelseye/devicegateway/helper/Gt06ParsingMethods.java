@@ -4,15 +4,16 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
-import com.wheelseye.devicegateway.domain.entities.DeviceSession;
-import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
-import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
+
 import com.wheelseye.devicegateway.dto.DeviceStatusDto;
 import com.wheelseye.devicegateway.dto.AlarmStatusDto;
 import com.wheelseye.devicegateway.dto.DeviceExtendedFeatureDto;
 import com.wheelseye.devicegateway.dto.DeviceIOPortsDto;
 import com.wheelseye.devicegateway.dto.DeviceLbsDataDto;
 import com.wheelseye.devicegateway.dto.LocationDto;
+import com.wheelseye.devicegateway.model.DeviceSession;
+import com.wheelseye.devicegateway.model.IMEI;
+import com.wheelseye.devicegateway.model.MessageFrame;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -120,7 +121,21 @@ public class Gt06ParsingMethods {
             logger.debug("Parsed frame: startBits=0x{:04X}, length={}, protocol=0x{:02X}, serial={}, crc=0x{:04X}",
                     startBits, length, protocolNumber, serialNumber, crc);
 
-            return new MessageFrame(startBits, length, protocolNumber, content, serialNumber, crc, stopBits, rawHex);
+            // return new MessageFrame(startBits, length, protocolNumber, content,
+            // serialNumber, crc, stopBits, rawHex);
+
+            return new MessageFrame(
+                    startBits,
+                    length,
+                    protocolNumber,
+                    content,
+                    serialNumber,
+                    crc,
+                    stopBits,
+                    rawHex,
+                    Instant.now(), // receivedAt
+                    null // imei
+            );
 
         } catch (Exception e) {
             logger.error("Error parsing GT06 frame: {}", e.getMessage(), e);
@@ -130,7 +145,7 @@ public class Gt06ParsingMethods {
 
     public IMEI extractIMEI(MessageFrame frame) {
         try {
-            ByteBuf content = frame.getContent();
+            ByteBuf content = frame.content();
 
             if (content.readableBytes() < 8) {
                 logger.warn("Insufficient bytes for IMEI extraction: {}", content.readableBytes());
@@ -232,7 +247,7 @@ public class Gt06ParsingMethods {
 
             DeviceSession session = sessionOpt.get();
             if (!session.isAuthenticated()) {
-                String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
+                String imei = session.getImei() != null ? session.getImei().value() : "unknown";
                 logger.warn("🔐 Session NOT authenticated for IMEI: {}", imei);
                 return Optional.empty();
             }
@@ -486,7 +501,7 @@ public class Gt06ParsingMethods {
                 content.skipBytes(18);
 
                 if (content.readableBytes() >= 8) { // GT06 LBS is 8 bytes
-                    byte[] lbsBytes = new byte[8]; 
+                    byte[] lbsBytes = new byte[8];
                     content.readBytes(lbsBytes);
                     lbsHex = ByteBufUtil.hexDump(lbsBytes);
 
