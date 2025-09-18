@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.protocol;
+package com.wheelseye.devicegateway.config;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.wheelseye.devicegateway.protocol.GT06Handler;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 
 import javax.annotation.PostConstruct;

@@ -1,18 +1,18 @@
-package com.wheelseye.devicegateway.config;
+// package com.wheelseye.devicegateway.config;
 
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.stereotype.Component;
+// import org.springframework.kafka.core.KafkaTemplate;
+// import org.springframework.stereotype.Component;
 
-@Component
-public class KafkaAdapter {
+// @Component
+// public class KafkaAdapter {
 
-    private final KafkaTemplate<String, byte[]> kafkaTemplate;
+//     private final KafkaTemplate<String, byte[]> kafkaTemplate;
 
-    public KafkaAdapter(KafkaTemplate<String, byte[]> kafkaTemplate) {
-        this.kafkaTemplate = kafkaTemplate;
-    }
+//     public KafkaAdapter(KafkaTemplate<String, byte[]> kafkaTemplate) {
+//         this.kafkaTemplate = kafkaTemplate;
+//     }
 
-    public void sendMessage(String topic, String key, byte[] message) {
-        kafkaTemplate.send(topic, key, message);
-    }
-}
+//     public void sendMessage(String topic, String key, byte[] message) {
+//         kafkaTemplate.send(topic, key, message);
+//     }
+// }

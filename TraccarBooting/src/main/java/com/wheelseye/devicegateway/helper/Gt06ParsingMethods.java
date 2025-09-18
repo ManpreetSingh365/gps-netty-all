@@ -37,8 +37,6 @@ public class Gt06ParsingMethods {
     private static final int VOLTAGE_MIN = 3400;
     private static final int VOLTAGE_MAX = 4200;
 
-    
-
     @Autowired
     private DeviceSessionService sessionService;
 
@@ -483,24 +481,24 @@ public class Gt06ParsingMethods {
             int lac = 0;
             int cid = 0;
 
-            // LBS usually after GPS block
-            if (content.readableBytes() > 20) {
-                content.skipBytes(20);
+            // LBS data starts after GPS location data (18 bytes from start in GT06)
+            if (content.readableBytes() > 18) {
+                content.skipBytes(18);
 
-                if (content.readableBytes() >= 7) {
-                    // [LAC:2][CID:2][MCC:2][MNC:1]
-                    byte[] lbsBytes = new byte[7];
+                if (content.readableBytes() >= 8) { // GT06 LBS is 8 bytes
+                    byte[] lbsBytes = new byte[8]; 
                     content.readBytes(lbsBytes);
                     lbsHex = ByteBufUtil.hexDump(lbsBytes);
 
-                    lac = ((lbsBytes[0] & 0xFF) << 8) | (lbsBytes[1] & 0xFF);
-                    cid = ((lbsBytes[2] & 0xFF) << 8) | (lbsBytes[3] & 0xFF);
-                    mcc = ((lbsBytes[4] & 0xFF) << 8) | (lbsBytes[5] & 0xFF);
-                    mnc = (lbsBytes[6] & 0xFF);
+                    // ✅ GT06 LBS format: [MCC:2][MNC:1][LAC:2][CID:3]
+                    mcc = ((lbsBytes[0] & 0xFF) << 8) | (lbsBytes[1] & 0xFF);
+                    mnc = (lbsBytes[2] & 0xFF);
+                    lac = ((lbsBytes[3] & 0xFF) << 8) | (lbsBytes[4] & 0xFF);
+                    cid = ((lbsBytes[5] & 0xFF) << 16) | ((lbsBytes[6] & 0xFF) << 8) | (lbsBytes[7] & 0xFF);
                 }
             }
 
-            // Reset & get satellites for signal estimation
+            // Reset to re-read for satellites
             content.resetReaderIndex();
             int satellites = 0;
             if (content.readableBytes() > 7) {
@@ -508,6 +506,7 @@ public class Gt06ParsingMethods {
                 satellites = content.readUnsignedByte();
             }
 
+            // Fake RSSI estimation (you may refine this later)
             int rssi = satellites > 4 ? -65 : satellites > 2 ? -75 : -85;
 
             return new DeviceLbsDataDto(lbsHex, mcc, mnc, lac, cid, rssi);

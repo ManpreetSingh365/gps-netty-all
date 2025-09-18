@@ -23,7 +23,7 @@ import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
-
+import org.springframework.stereotype.Component;
 
 @Configuration
 @EnableKafka
@@ -35,6 +35,7 @@ public class KafkaConfig {
     @Value("${KAFKA_CONSUMER_GROUP_ID}")
     private String consumerGroupId;
 
+    // ---------------- Kafka Admin & Topics ----------------
     @Bean
     public KafkaAdmin kafkaAdmin() {
         Map<String, Object> configs = new HashMap<>();
@@ -52,18 +53,18 @@ public class KafkaConfig {
         return new NewTopic("location.device", 3, (short) 1);
     }
 
-
+    // ---------------- Producer ----------------
     @Bean
     public ProducerFactory<String, byte[]> producerFactory() {
-        Map<String, Object> configProps = new HashMap<>();
-        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
-        configProps.put(ProducerConfig.ACKS_CONFIG, "1");
-        configProps.put(ProducerConfig.RETRIES_CONFIG, 3);
-        configProps.put(ProducerConfig.BATCH_SIZE_CONFIG, 16384);
-        configProps.put(ProducerConfig.LINGER_MS_CONFIG, 5);
-        return new DefaultKafkaProducerFactory<>(configProps);
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
+        props.put(ProducerConfig.ACKS_CONFIG, "1");
+        props.put(ProducerConfig.RETRIES_CONFIG, 3);
+        props.put(ProducerConfig.BATCH_SIZE_CONFIG, 16_384);
+        props.put(ProducerConfig.LINGER_MS_CONFIG, 5);
+        return new DefaultKafkaProducerFactory<>(props);
     }
 
     @Bean
@@ -71,25 +72,39 @@ public class KafkaConfig {
         return new KafkaTemplate<>(producerFactory());
     }
 
+    // ---------------- Consumer ----------------
     @Bean
     public ConsumerFactory<String, byte[]> consumerFactory() {
-        Map<String, Object> configProps = new HashMap<>();
-        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroupId);
-        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class);
-        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        configProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
-        return new DefaultKafkaConsumerFactory<>(configProps);
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroupId);
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        return new DefaultKafkaConsumerFactory<>(props);
     }
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, byte[]> kafkaListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, byte[]> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        var factory = new ConcurrentKafkaListenerContainerFactory<String, byte[]>();
         factory.setConsumerFactory(consumerFactory());
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
-        // Do not auto-start consumers on application startup
-        factory.setAutoStartup(false);
+        factory.setAutoStartup(false); // Do not auto-start consumers
         return factory;
+    }
+
+    // ---------------- Adapter ----------------
+    @Component
+    public static class KafkaAdapter {
+        private final KafkaTemplate<String, byte[]> template;
+
+        public KafkaAdapter(KafkaTemplate<String, byte[]> template) {
+            this.template = template;
+        }
+
+        public void sendMessage(String topic, String key, byte[] payload) {
+            template.send(topic, key, payload);
+        }
     }
 }

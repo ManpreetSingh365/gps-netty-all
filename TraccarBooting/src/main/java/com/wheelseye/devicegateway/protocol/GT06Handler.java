@@ -11,10 +11,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.web.WebProperties.Resources.Chain.Strategy.Fixed;
 import org.springframework.stereotype.Component;
 
-import com.wheelseye.devicegateway.config.KafkaAdapter;
+import com.wheelseye.devicegateway.config.KafkaConfig.KafkaAdapter;
+// import com.wheelseye.devicegateway.config.KafkaAdapter;
 import com.wheelseye.devicegateway.domain.entities.DeviceSession;
 import com.wheelseye.devicegateway.domain.valueobjects.IMEI;
-import com.wheelseye.devicegateway.domain.valueobjects.Location;
 import com.wheelseye.devicegateway.domain.valueobjects.MessageFrame;
 import com.wheelseye.devicegateway.dto.AlarmStatusDto;
 import com.wheelseye.devicegateway.dto.DeviceExtendedFeatureDto;
@@ -62,8 +62,8 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
     // @Autowired
     // private TelemetryProcessingService telemetryService;
 
-    @Autowired
-    private GT06ProtocolParser protocolParser;
+    // @Autowired
+    // private GT06ProtocolParser protocolParser;
 
     @Autowired
     private ChannelRegistry channelRegistry;
@@ -175,7 +175,7 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
                 }
                 case MSG_LBS_MULTIPLE -> {
                     logger.info("📶 LBS MULTIPLE PACKET (0x24) detected from {}", remoteAddress);
-                    handleLBSPacket(ctx, frame);
+                    // handleLBSPacket(ctx, frame);
                 }
                 case MSG_COMMAND_RESPONSE -> {
                     logger.info("📤 COMMAND RESPONSE (0x8A) detected from {}", remoteAddress);
@@ -239,15 +239,15 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
             logger.info("🔐 Login request from IMEI: {}", imei.getValue());
 
             // CRITICAL: Detect and SAVE device variant properly
-            String deviceVariant = detectDeviceVariantFromLogin(frame, imei);
-            logger.info("🔍 Device variant detected: {} for IMEI: {}", deviceVariant, imei.getValue());
+            // String deviceVariant = detectDeviceVariantFromLogin(frame, imei);
+            // logger.info("🔍 Device variant detected: {} for IMEI: {}", deviceVariant, imei.getValue());
 
             DeviceSession session = DeviceSession.create(imei);
             session.setChannelId(ctx.channel().id().asShortText());
             session.setRemoteAddress(remoteAddress);
 
             // CRITICAL FIX: Ensure variant is properly saved and persisted
-            session.setDeviceVariant(deviceVariant);
+            // session.setDeviceVariant(deviceVariant);
             session.authenticate();
 
             // Save session BEFORE sending ACK to ensure persistence
@@ -273,7 +273,7 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
             ctx.writeAndFlush(ack).addListener(future -> {
                 if (future.isSuccess()) {
                     logger.info("✅ Login ACK sent to {} (IMEI: {})", remoteAddress, imei.getValue());
-                    provideDeviceConfigurationAdvice(deviceVariant, imei.getValue());
+                    // provideDeviceConfigurationAdvice(deviceVariant, imei.getValue());
                     logger.info("🔄 Connection kept open for further communication from IMEI: {}", imei.getValue());
                 } else {
                     logger.error("❌ Failed to send login ACK to {}", remoteAddress);
@@ -290,76 +290,76 @@ public class GT06Handler extends ChannelInboundHandlerAdapter {
     /**
      * CRITICAL FIX: V5 status packet handling with proper variant retrieval
      */
-    private void handleStatusPacketForV5Device(ChannelHandlerContext ctx, MessageFrame frame) {
-        String remoteAddress = ctx.channel().remoteAddress().toString();
+    // private void handleStatusPacketForV5Device(ChannelHandlerContext ctx, MessageFrame frame) {
+    //     String remoteAddress = ctx.channel().remoteAddress().toString();
 
-        Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
-        if (sessionOpt.isEmpty()) {
-            logger.warn("❌ No authenticated session for status from {}", remoteAddress);
-            return;
-        }
+    //     Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
+    //     if (sessionOpt.isEmpty()) {
+    //         logger.warn("❌ No authenticated session for status from {}", remoteAddress);
+    //         return;
+    //     }
 
-        try {
-            DeviceSession session = sessionOpt.get();
-            String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
+    //     try {
+    //         DeviceSession session = sessionOpt.get();
+    //         String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
 
-            // CRITICAL FIX: Get variant from session and DON'T re-detect
-            String variant = session.getDeviceVariant();
+    //         // CRITICAL FIX: Get variant from session and DON'T re-detect
+    //         String variant = session.getDeviceVariant();
 
-            // Debug logging
-            logger.info("🔍 Session variant check: stored='{}' for IMEI: {}", variant, imei);
+    //         // Debug logging
+    //         logger.info("🔍 Session variant check: stored='{}' for IMEI: {}", variant, imei);
 
-            // CRITICAL: Do NOT re-detect variant - use the stored one from login
-            if (variant == null || variant.equals("UNKNOWN") || variant.equals("GT06_UNKNOWN")) {
-                logger.warn("⚠️ Variant lost from session for IMEI: {}, restoring from login detection", imei);
-                // Only re-detect if completely missing
-                variant = detectDeviceVariantFromLogin(frame, session.getImei());
-                session.setDeviceVariant(variant);
-                sessionService.saveSession(session);
-                logger.info("🔧 Restored variant to: {} for IMEI: {}", variant, imei);
-            }
+    //         // CRITICAL: Do NOT re-detect variant - use the stored one from login
+    //         if (variant == null || variant.equals("UNKNOWN") || variant.equals("GT06_UNKNOWN")) {
+    //             logger.warn("⚠️ Variant lost from session for IMEI: {}, restoring from login detection", imei);
+    //             // Only re-detect if completely missing
+    //             // variant = detectDeviceVariantFromLogin(frame, session.getImei());
+    //             // session.setDeviceVariant(variant);
+    //             // sessionService.saveSession(session);
+    //             logger.info("🔧 Restored variant to: {} for IMEI: {}", variant, imei);
+    //         }
 
-            logger.info("📊 Processing status packet for IMEI: {} (Variant: {})", imei, variant);
+    //         logger.info("📊 Processing status packet for IMEI: {} (Variant: {})", imei, variant);
 
-            // CRITICAL FIX: Use correct V5 logic based on stored variant
-            if ("V5".equalsIgnoreCase(variant)) {
-                logger.info("✅ V5 device status packet - this is EXPECTED behavior after login for IMEI: {}", imei);
-                logger.info("📱 V5 Device {} is functioning NORMALLY - status packets are primary communication", imei);
+    //         // CRITICAL FIX: Use correct V5 logic based on stored variant
+    //         if ("V5".equalsIgnoreCase(variant)) {
+    //             logger.info("✅ V5 device status packet - this is EXPECTED behavior after login for IMEI: {}", imei);
+    //             logger.info("📱 V5 Device {} is functioning NORMALLY - status packets are primary communication", imei);
 
-                // KAFKA DISABLED - Process locally only
-                logger.info("📊 Status packet processed locally (Kafka disabled as requested) for IMEI: {}", imei);
+    //             // KAFKA DISABLED - Process locally only
+    //             logger.info("📊 Status packet processed locally (Kafka disabled as requested) for IMEI: {}", imei);
 
-                session.updateActivity();
-                sessionService.saveSession(session);
-                sendGenericAck(ctx, frame);
+    //             session.updateActivity();
+    //             sessionService.saveSession(session);
+    //             sendGenericAck(ctx, frame);
 
-                // Provide guidance only once
-                if (!session.hasReceivedStatusAdvice()) {
-                    logger.info("💡 V5 Device Tips for IMEI {}:", imei);
-                    logger.info("    ✅ V5 devices primarily send status packets, not location packets");
-                    logger.info("    ✅ This is NORMAL behavior - device is working correctly");
-                    logger.info("    📍 For location data, try: SMS 'tracker#123456#' or move device physically");
-                    logger.info("    📱 Device may also send LBS packets (0x24) which contain approximate location");
-                    session.markStatusAdviceGiven();
-                    sessionService.saveSession(session);
-                }
+    //             // Provide guidance only once
+    //             if (!session.hasReceivedStatusAdvice()) {
+    //                 logger.info("💡 V5 Device Tips for IMEI {}:", imei);
+    //                 logger.info("    ✅ V5 devices primarily send status packets, not location packets");
+    //                 logger.info("    ✅ This is NORMAL behavior - device is working correctly");
+    //                 logger.info("    📍 For location data, try: SMS 'tracker#123456#' or move device physically");
+    //                 logger.info("    📱 Device may also send LBS packets (0x24) which contain approximate location");
+    //                 session.markStatusAdviceGiven();
+    //                 sessionService.saveSession(session);
+    //             }
 
-            } else {
-                // For non-V5 devices
-                logger.warn("⚠️ Non-V5 device {} sending status instead of location - check configuration", imei);
-                logger.warn("💡 Try SMS commands: 'upload_time#123456#30#' or 'tracker#123456#'");
+    //         } else {
+    //             // For non-V5 devices
+    //             logger.warn("⚠️ Non-V5 device {} sending status instead of location - check configuration", imei);
+    //             logger.warn("💡 Try SMS commands: 'upload_time#123456#30#' or 'tracker#123456#'");
 
-                logger.info("📊 Status packet processed locally (Kafka disabled as requested) for IMEI: {}", imei);
-                session.updateActivity();
-                sessionService.saveSession(session);
-                sendGenericAck(ctx, frame);
-            }
+    //             logger.info("📊 Status packet processed locally (Kafka disabled as requested) for IMEI: {}", imei);
+    //             session.updateActivity();
+    //             sessionService.saveSession(session);
+    //             sendGenericAck(ctx, frame);
+    //         }
 
-        } catch (Exception e) {
-            logger.error("💥 Error handling status packet from {}: {}", remoteAddress, e.getMessage(), e);
-            sendGenericAck(ctx, frame);
-        }
-    }
+    //     } catch (Exception e) {
+    //         logger.error("💥 Error handling status packet from {}: {}", remoteAddress, e.getMessage(), e);
+    //         sendGenericAck(ctx, frame);
+    //     }
+    // }
 
     /**
      * Enhanced location packet handling with immediate display
@@ -555,152 +555,152 @@ private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String 
         };
     }
 
-private boolean getBooleanValue(Map<String, Object> map, String key) {
-    Object value = map.get(key);
-    if (value instanceof Boolean) return (Boolean) value;
-    if (value instanceof String) return Boolean.parseBoolean((String) value);
-    return false;
-}
+// private boolean getBooleanValue(Map<String, Object> map, String key) {
+//     Object value = map.get(key);
+//     if (value instanceof Boolean) return (Boolean) value;
+//     if (value instanceof String) return Boolean.parseBoolean((String) value);
+//     return false;
+// }
 
-private double getDouble(Map<String, Object> map, String key) {
-    Object value = map.get(key);
-    if (value instanceof Number) return ((Number) value).doubleValue();
-    if (value instanceof String) {
-        try { return Double.parseDouble((String) value); } catch (NumberFormatException ignored) {}
-    }
-    return 0.0;
-}
+// private double getDouble(Map<String, Object> map, String key) {
+//     Object value = map.get(key);
+//     if (value instanceof Number) return ((Number) value).doubleValue();
+//     if (value instanceof String) {
+//         try { return Double.parseDouble((String) value); } catch (NumberFormatException ignored) {}
+//     }
+//     return 0.0;
+// }
 
-private int getInt(Map<String, Object> map, String key) {
-    Object value = map.get(key);
-    if (value instanceof Number) return ((Number) value).intValue();
-    if (value instanceof String) {
-        try { return Integer.parseInt((String) value); } catch (NumberFormatException ignored) {}
-    }
-    return 0;
-}
+// private int getInt(Map<String, Object> map, String key) {
+//     Object value = map.get(key);
+//     if (value instanceof Number) return ((Number) value).intValue();
+//     if (value instanceof String) {
+//         try { return Integer.parseInt((String) value); } catch (NumberFormatException ignored) {}
+//     }
+//     return 0;
+// }
 
     
-    // Helper method to count active alarms
-    private int getActiveAlarmCount(Map<String, Object> alarmData) {
-        int count = 0;
-        for (String key : alarmData.keySet()) {
-            if (key.endsWith("Alarm") && Boolean.TRUE.equals(alarmData.get(key))) {
-                count++;
-            }
-        }
-        return count;
-    }
+//     // Helper method to count active alarms
+//     private int getActiveAlarmCount(Map<String, Object> alarmData) {
+//         int count = 0;
+//         for (String key : alarmData.keySet()) {
+//             if (key.endsWith("Alarm") && Boolean.TRUE.equals(alarmData.get(key))) {
+//                 count++;
+//             }
+//         }
+//         return count;
+//     }
             
     /**
      * Enhanced LBS packet handling
      */
-    private void handleLBSPacket(ChannelHandlerContext ctx, MessageFrame frame) {
-        Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
-        if (sessionOpt.isEmpty()) {
-            logger.warn("❌ No authenticated session for LBS from {}", ctx.channel().remoteAddress());
-            return;
-        }
+    // private void handleLBSPacket(ChannelHandlerContext ctx, MessageFrame frame) {
+    //     Optional<DeviceSession> sessionOpt = getAuthenticatedSession(ctx);
+    //     if (sessionOpt.isEmpty()) {
+    //         logger.warn("❌ No authenticated session for LBS from {}", ctx.channel().remoteAddress());
+    //         return;
+    //     }
 
-        try {
-            DeviceSession session = sessionOpt.get();
-            String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
+    //     try {
+    //         DeviceSession session = sessionOpt.get();
+    //         String imei = session.getImei() != null ? session.getImei().getValue() : "unknown";
 
-            logger.info("📶 Processing LBS packet for IMEI: {}", imei);
+    //         logger.info("📶 Processing LBS packet for IMEI: {}", imei);
 
-            // LBS packets may contain approximate location data
-            ByteBuf content = frame.getContent();
-            content.resetReaderIndex();
-            String hexData = ByteBufUtil.hexDump(content);
+    //         // LBS packets may contain approximate location data
+    //         ByteBuf content = frame.getContent();
+    //         content.resetReaderIndex();
+    //         String hexData = ByteBufUtil.hexDump(content);
 
-            logger.info("📍 ========== LBS LOCATION DATA ==========");
-            logger.info("📍 IMEI: {}", imei);
-            logger.info("📍 Source: {}", ctx.channel().remoteAddress());
-            logger.info("📍 Protocol: LBS Multiple (0x24)");
-            logger.info("📍 Raw Data: {}", hexData);
-            logger.info("📍 Description: Cell tower based approximate location");
-            logger.info("📍 Note: This provides rough location based on cell towers");
-            logger.info("📍 ====================================");
+    //         logger.info("📍 ========== LBS LOCATION DATA ==========");
+    //         logger.info("📍 IMEI: {}", imei);
+    //         logger.info("📍 Source: {}", ctx.channel().remoteAddress());
+    //         logger.info("📍 Protocol: LBS Multiple (0x24)");
+    //         logger.info("📍 Raw Data: {}", hexData);
+    //         logger.info("📍 Description: Cell tower based approximate location");
+    //         logger.info("📍 Note: This provides rough location based on cell towers");
+    //         logger.info("📍 ====================================");
 
-            logger.info("📶 LBS processed locally (Kafka disabled as requested) for IMEI: {}", imei);
+    //         logger.info("📶 LBS processed locally (Kafka disabled as requested) for IMEI: {}", imei);
 
-            session.updateActivity();
-            sessionService.saveSession(session);
-            sendGenericAck(ctx, frame);
+    //         session.updateActivity();
+    //         sessionService.saveSession(session);
+    //         sendGenericAck(ctx, frame);
 
-        } catch (Exception e) {
-            logger.error("💥 Error handling LBS packet: {}", e.getMessage(), e);
-            sendGenericAck(ctx, frame);
-        }
-    }
+    //     } catch (Exception e) {
+    //         logger.error("💥 Error handling LBS packet: {}", e.getMessage(), e);
+    //         sendGenericAck(ctx, frame);
+    //     }
+    // }
 
     /**
      * CRITICAL FIX: Device variant detection ONLY from login packets
      */
-    private String detectDeviceVariantFromLogin(MessageFrame frame, IMEI imei) {
-        try {
-            // Only detect variant during LOGIN packets
-            if (frame.getProtocolNumber() != MSG_LOGIN) {
-                logger.debug("🔍 Not a login packet, skipping variant detection");
-                return "UNKNOWN";
-            }
+    // private String detectDeviceVariantFromLogin(MessageFrame frame, IMEI imei) {
+    //     try {
+    //         // Only detect variant during LOGIN packets
+    //         if (frame.getProtocolNumber() != MSG_LOGIN) {
+    //             logger.debug("🔍 Not a login packet, skipping variant detection");
+    //             return "UNKNOWN";
+    //         }
 
-            int dataLength = frame.getContent().readableBytes();
+    //         int dataLength = frame.getContent().readableBytes();
 
-            logger.debug("🔍 Login packet analysis: length={} bytes", dataLength);
+    //         logger.debug("🔍 Login packet analysis: length={} bytes", dataLength);
 
-            // V5 device detection - short login frames
-            if (dataLength <= 12) {
-                logger.info("🔍 V5 device detected: short login frame ({} bytes)", dataLength);
-                return "V5";
-            }
+    //         // V5 device detection - short login frames
+    //         if (dataLength <= 12) {
+    //             logger.info("🔍 V5 device detected: short login frame ({} bytes)", dataLength);
+    //             return "V5";
+    //         }
 
-            // SK05 device detection - standard login frames
-            if (dataLength >= 13 && dataLength <= 16) {
-                logger.info("🔍 SK05 device detected: standard login frame ({} bytes)", dataLength);
-                return "SK05";
-            }
+    //         // SK05 device detection - standard login frames
+    //         if (dataLength >= 13 && dataLength <= 16) {
+    //             logger.info("🔍 SK05 device detected: standard login frame ({} bytes)", dataLength);
+    //             return "SK05";
+    //         }
 
-            // GT06 standard variants
-            if (dataLength >= 8) {
-                logger.info("🔍 GT06_STANDARD device detected: login frame ({} bytes)", dataLength);
-                return "GT06_STANDARD";
-            }
+    //         // GT06 standard variants
+    //         if (dataLength >= 8) {
+    //             logger.info("🔍 GT06_STANDARD device detected: login frame ({} bytes)", dataLength);
+    //             return "GT06_STANDARD";
+    //         }
 
-            return "GT06_UNKNOWN";
+    //         return "GT06_UNKNOWN";
 
-        } catch (Exception e) {
-            logger.debug("🔍 Error detecting device variant: {}", e.getMessage());
-            return "GT06_UNKNOWN";
-        }
-    }
+    //     } catch (Exception e) {
+    //         logger.debug("🔍 Error detecting device variant: {}", e.getMessage());
+    //         return "GT06_UNKNOWN";
+    //     }
+    // }
 
     /**
      * Provide device-specific configuration advice
      */
-    private void provideDeviceConfigurationAdvice(String variant, String imei) {
-        switch (variant.toUpperCase()) {
-            case "V5" -> {
-                logger.info("⚙️ V5 Device Configuration - IMEI: {}", imei);
-                logger.info("    ✅ V5 devices normally send status packets after login");
-                logger.info("    📍 For location tracking: Move device or SMS 'tracker#123456#'");
-                logger.info("    📊 Status packets indicate device is working properly");
-                logger.info("    📶 May also send LBS packets for approximate location");
-            }
-            case "SK05" -> {
-                logger.info("⚙️ SK05 Device Configuration - IMEI: {}", imei);
-                logger.info("    📍 Should send location packets immediately after login");
-                logger.info("    📱 If no location: SMS 'upload_time#123456#30#'");
-                logger.info("    📡 Check GPS antenna and signal strength");
-            }
-            default -> {
-                logger.info("⚙️ GT06 Device Configuration - IMEI: {}", imei);
-                logger.info("    📱 SMS: 'upload_time#123456#30#' (30-second intervals)");
-                logger.info("    📱 SMS: 'tracker#123456#' (enable tracking)");
-                logger.info("    📍 Move device to trigger GPS location");
-            }
-        }
-    }
+    // private void provideDeviceConfigurationAdvice(String variant, String imei) {
+    //     switch (variant.toUpperCase()) {
+    //         case "V5" -> {
+    //             logger.info("⚙️ V5 Device Configuration - IMEI: {}", imei);
+    //             logger.info("    ✅ V5 devices normally send status packets after login");
+    //             logger.info("    📍 For location tracking: Move device or SMS 'tracker#123456#'");
+    //             logger.info("    📊 Status packets indicate device is working properly");
+    //             logger.info("    📶 May also send LBS packets for approximate location");
+    //         }
+    //         case "SK05" -> {
+    //             logger.info("⚙️ SK05 Device Configuration - IMEI: {}", imei);
+    //             logger.info("    📍 Should send location packets immediately after login");
+    //             logger.info("    📱 If no location: SMS 'upload_time#123456#30#'");
+    //             logger.info("    📡 Check GPS antenna and signal strength");
+    //         }
+    //         default -> {
+    //             logger.info("⚙️ GT06 Device Configuration - IMEI: {}", imei);
+    //             logger.info("    📱 SMS: 'upload_time#123456#30#' (30-second intervals)");
+    //             logger.info("    📱 SMS: 'tracker#123456#' (enable tracking)");
+    //             logger.info("    📍 Move device to trigger GPS location");
+    //         }
+    //     }
+    // }
 
     /**
      * Handle unknown packets

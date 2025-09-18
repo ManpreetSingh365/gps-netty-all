@@ -10,29 +10,19 @@ public class DeviceSessionEventMapper {
 
     // Domain -> Proto
     public static com.wheelseye.devicegateway.protobuf.DeviceSessionEvent toProto(DeviceSessionEvent event) {
-        com.wheelseye.devicegateway.protobuf.DeviceSessionEvent.Builder builder =
-                com.wheelseye.devicegateway.protobuf.DeviceSessionEvent.newBuilder()
-                        .setEventType(event.getEventType())
-                        .setSessionId(event.getSessionId())
-                        .setImei(
-                                com.wheelseye.devicegateway.protobuf.IMEI.newBuilder()
-                                        .setValue(event.getImei().getValue())
-                                        .build()
-                        )
-                        .setDeviceModel(event.getDeviceModel())
-                        .setIpAddress(event.getIpAddress())
-                        .setProtocolVersion(event.getProtocolVersion());
-
-        // Convert Instant -> Timestamp
-        Instant ts = event.getTimestamp();
-        builder.setTimestamp(
-                Timestamp.newBuilder()
-                        .setSeconds(ts.getEpochSecond())
-                        .setNanos(ts.getNano())
-                        .build()
-        );
-
-        return builder.build();
+        return com.wheelseye.devicegateway.protobuf.DeviceSessionEvent.newBuilder()
+                .setEventType(event.eventType())
+                .setSessionId(event.sessionId())
+                .setImei(
+                        com.wheelseye.devicegateway.protobuf.IMEI.newBuilder()
+                                .setValue(event.imei().getValue())
+                                .build()
+                )
+                .setDeviceModel(event.deviceModel())
+                .setIpAddress(event.ipAddress())
+                .setProtocolVersion(event.protocolVersion())
+                .setTimestamp(toProtoTimestamp(event.timestamp()))
+                .build();
     }
 
     // Proto -> Domain
@@ -42,20 +32,23 @@ public class DeviceSessionEventMapper {
                 proto.getTimestamp().getNanos()
         );
 
-        DeviceSessionEvent event = new DeviceSessionEvent(
+        // Use private constructor via factory method, since record is immutable
+        return new DeviceSessionEvent(
                 proto.getEventType(),
                 proto.getSessionId(),
                 new IMEI(proto.getImei().getValue()),
                 proto.getDeviceModel(),
                 proto.getIpAddress(),
-                proto.getProtocolVersion()
+                proto.getProtocolVersion(),
+                timestamp
         );
+    }
 
-        // Timestamp is generated at construction time in your current class,
-        // but if you want to preserve proto timestamp:
-        // (Uncomment this line if you add a setter for timestamp in your class)
-        // event.setTimestamp(timestamp);
-
-        return event;
+    // Helper: Instant -> Protobuf Timestamp
+    private static Timestamp toProtoTimestamp(Instant instant) {
+        return Timestamp.newBuilder()
+                .setSeconds(instant.getEpochSecond())
+                .setNanos(instant.getNano())
+                .build();
     }
 }
