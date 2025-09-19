@@ -12,10 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import com.wheelseye.devicegateway.protocol.GT06Handler;
+import com.wheelseye.devicegateway.protocol.Gt06ProtocolDecoder;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
-
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.util.concurrent.TimeUnit;
@@ -38,11 +36,11 @@ public class NettyTcpServer {
     private Channel serverChannel;
     
     private final DeviceSessionService sessionService;
-    private final GT06Handler gt06Handler;
+    private final Gt06ProtocolDecoder gt06ProtocolDecoder;
 
-    public NettyTcpServer(DeviceSessionService sessionService, GT06Handler gt06Handler) {
+    public NettyTcpServer(DeviceSessionService sessionService, Gt06ProtocolDecoder gt06ProtocolDecoder) {
         this.sessionService = sessionService;
-        this.gt06Handler = gt06Handler;
+        this.gt06ProtocolDecoder = gt06ProtocolDecoder;
     }
 
     @PostConstruct
@@ -69,7 +67,7 @@ public class NettyTcpServer {
                             // pipeline.addLast(new GT06FrameDecoder());
                             
                             // Add GT06 protocol handler
-                            pipeline.addLast(gt06Handler);
+                            pipeline.addLast(gt06ProtocolDecoder);
                         }
                     })
                     .option(ChannelOption.SO_BACKLOG, 128)

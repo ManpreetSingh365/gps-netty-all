@@ -7,9 +7,9 @@ public record LocationDto(
                 boolean gpsValid,
                 double latitude,
                 double longitude,
-                double speed,
-                double course,
-                double accuracy,
+                double speed, // change to float later
+                double course, // change to float later
+                double accuracy, // change to float later
                 int satellites) {
 
         public static LocationDto getDefaultLocation() {
