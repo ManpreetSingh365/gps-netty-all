@@ -1,61 +1,98 @@
-package com.wheelseye.devicegateway.mappers;
+// // DeviceSessionMapper.java
+// package com.wheelseye.devicegateway.mappers;
 
-import com.wheelseye.devicegateway.model.DeviceSession;
-import com.wheelseye.devicegateway.model.IMEI;
+// import com.google.protobuf.Timestamp;
+// import com.wheelseye.devicegateway.model.DeviceSession;
+// import com.wheelseye.devicegateway.model.IMEI;
 
-import java.time.Instant;
+// import java.time.Instant;
+// import java.util.Map;
+// import java.util.stream.Collectors;
 
-public class DeviceSessionMapper {
+// public class DeviceSessionMapper {
 
-    // Entity -> Proto
-    public static com.wheelseye.devicegateway.protobuf.DeviceSession toProto(DeviceSession entity) {
-        com.wheelseye.devicegateway.protobuf.DeviceSession.Builder builder =
-                com.wheelseye.devicegateway.protobuf.DeviceSession.newBuilder()
-                        .setId(entity.getId())
-                        .setImei(com.wheelseye.devicegateway.protobuf.IMEI.newBuilder().setValue(entity.getImei().value()).build())
-                        .setChannelId(entity.getChannelId())
-                        .setAuthenticated(entity.isAuthenticated())
-                        .setRemoteAddress(entity.getRemoteAddress())
-                        .setCreatedAt(
-                                com.google.protobuf.Timestamp.newBuilder()
-                                        .setSeconds(entity.getCreatedAt().getEpochSecond())
-                                        .setNanos(entity.getCreatedAt().getNano())
-                                        .build()
-                        )
-                        .setLastActivityAt(
-                                com.google.protobuf.Timestamp.newBuilder()
-                                        .setSeconds(entity.getLastActivityAt().getEpochSecond())
-                                        .setNanos(entity.getLastActivityAt().getNano())
-                                        .build()
-                        );
+//     // Helper proto constructor for embedding in DeviceSessionEvent
+//     public static com.wheelseye.devicegateway.protobuf.DeviceSession toProto(
+//         String id,
+//         IMEI imei,
+//         String deviceModel,
+//         String ipAddress,
+//         String protocolVersion,
+//         Instant timestamp
+//     ) {
+//         return com.wheelseye.devicegateway.protobuf.DeviceSession.newBuilder()
+//             .setId(id)
+//             .setImei(
+//                 com.wheelseye.devicegateway.protobuf.IMEI.newBuilder()
+//                     .setValue(imei.value())
+//                     .build())
+//             .setDeviceModel(deviceModel)
+//             .setIpAddress(ipAddress)
+//             .setProtocolVersion(protocolVersion)
+//             .setLastActivityAt(toProtoTimestamp(timestamp))
+//             .build();
+//     }
 
-        entity.getAttributes().forEach((key, value) ->
-                builder.putAttributes(key, String.valueOf(value))
-        );
+//     // Domain -> Proto
+//     public static com.wheelseye.devicegateway.protobuf.DeviceSession toProto(DeviceSession entity) {
+//         if (entity == null) return null;
 
-        return builder.build();
-    }
+//         var builder = com.wheelseye.devicegateway.protobuf.DeviceSession.newBuilder()
+//             .setId(entity.getId())
+//             .setImei(
+//                 com.wheelseye.devicegateway.protobuf.IMEI.newBuilder()
+//                     .setValue(entity.getImei().value())
+//                     .build())
+//             .setChannelId(entity.getChannelId())
+//             .setCreatedAt(toProtoTimestamp(entity.getCreatedAt()))
+//             .setLastActivityAt(toProtoTimestamp(entity.getLastActivityAt()))
+//             .setAuthenticated(entity.isAuthenticated())
+//             .setRemoteAddress(entity.getRemoteAddress());
 
-    public static DeviceSession fromProto(com.wheelseye.devicegateway.protobuf.DeviceSession proto) {
+//         if (entity.getAttributes() != null) {
+//             Map<String, String> attrs = entity.getAttributes().entrySet().stream()
+//                 .filter(e -> e.getValue() != null)
+//                 .collect(Collectors.toMap(
+//                     Map.Entry::getKey,
+//                     e -> e.getValue().toString()
+//                 ));
+//             builder.putAllAttributes(attrs);
+//         }
 
+//         return builder.build();
+//     }
 
+//     // Proto -> Domain
+//     public static DeviceSession fromProto(com.wheelseye.devicegateway.protobuf.DeviceSession proto) {
+//         if (proto == null) return null;
 
-        DeviceSession entity = new DeviceSession(
-                proto.getId(),
-                new IMEI(proto.getImei().getValue())
-        );
+//         IMEI imei = IMEI.of(proto.getImei().getValue());
 
-        entity.setImei(new com.wheelseye.devicegateway.model.IMEI(proto.getImei().getValue()));
-        entity.setChannelId(proto.getChannelId());
-        entity.setAuthenticated(proto.getAuthenticated());
-        entity.setRemoteAddress(proto.getRemoteAddress());
-        entity.setCreatedAt(Instant.ofEpochSecond(proto.getCreatedAt().getSeconds(), proto.getCreatedAt().getNanos()));
-        entity.setLastActivityAt(Instant.ofEpochSecond(proto.getLastActivityAt().getSeconds(), proto.getLastActivityAt().getNanos()));
+//         return new DeviceSession(
+//             proto.getId(),
+//             imei,
+//             proto.getChannelId(),
+//             proto.getRemoteAddress(),
+//             proto.getProtocolVersion(),
+//             proto.getStatus(),
+//             proto.getAuthenticated(),
+//             fromProtoTimestamp(proto.getCreatedAt()),
+//             fromProtoTimestamp(proto.getLastActivityAt()),
+//             proto.hasLastLoginAt() ? fromProtoTimestamp(proto.getLastLoginAt()) : null,
+//             proto.getAttributesMap()
+//         );
+//     }
 
-        proto.getAttributesMap().forEach((key, value) ->
-                entity.setAttribute(key, value)
-        );
+//     private static Timestamp toProtoTimestamp(Instant instant) {
+//         if (instant == null) return null;
+//         return Timestamp.newBuilder()
+//             .setSeconds(instant.getEpochSecond())
+//             .setNanos(instant.getNano())
+//             .build();
+//     }
 
-        return entity;
-    }
-}
+//     private static Instant fromProtoTimestamp(Timestamp ts) {
+//         if (ts == null) return null;
+//         return Instant.ofEpochSecond(ts.getSeconds(), ts.getNanos());
+//     }
+// }

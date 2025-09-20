@@ -1,329 +1,175 @@
 package com.wheelseye.devicegateway.model;
 
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.redis.core.RedisHash;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import io.netty.channel.Channel;
-
 /**
- * Enhanced DeviceSession Entity - FULLY COMPATIBLE with your existing code
- * 
- * Key Enhancements:
- * 2. ✅ All existing constructors preserved
- * 3. ✅ Enhanced with new methods for V5 handling
- * 4. ✅ Proper Jackson annotations for Redis serialization
- * 5. ✅ Thread-safe operations
+ * GT06 Device Session – immutable core, thread-safe state, Redis-persisted.
  */
-public class DeviceSession {
+@RedisHash("device-sessions")
+public final class DeviceSession {
 
+    @Id
     private final String id;
-    private IMEI imei;
-    private String channelId; // Store channel ID instead of Channel object
-    private Instant createdAt;
-    private Instant lastActivityAt;
-    private boolean authenticated;
-    private String remoteAddress;
-    private final Map<String, Object> attributes;
+    private final IMEI imei;
+    private final Instant createdAt;
 
-    // NEW: Enhanced fields for V5 device support
-    private volatile String deviceVariant = "UNKNOWN"; // Make it volatile for thread safety
+    // Mutable, thread-safe fields
+    private volatile String channelId;
+    private volatile String remoteAddress;
+    private volatile String protocolVersion = "GT06_1.8.1";
+    private final AtomicReference<DeviceVariant> deviceVariant =
+        new AtomicReference<>(DeviceVariant.GT06_STANDARD);
+    private final AtomicReference<DeviceStatus> status =
+        new AtomicReference<>(DeviceStatus.OFFLINE);
+    private final AtomicBoolean authenticated = new AtomicBoolean(false);
+    private volatile Instant lastActivityAt;
+    private volatile Instant lastLoginAt;
 
-    private boolean hasReceivedLocationData = false;
-    private boolean statusAdviceGiven = false;
+    // Arbitrary attributes
+    private final Map<String, Object> attributes = new ConcurrentHashMap<>();
 
-    // Default constructor (EXISTING)
-    public DeviceSession() {
+    // === Constructors ===
+
+    private DeviceSession(IMEI imei) {
         this.id = UUID.randomUUID().toString();
+        this.imei = IMEI.of(imei.value());
         this.createdAt = Instant.now();
-        this.lastActivityAt = Instant.now();
-        this.authenticated = false;
-        this.attributes = new HashMap<>();
+        this.lastActivityAt = this.createdAt;
+        this.lastLoginAt = this.createdAt;
     }
 
-    // Constructor with ID and IMEI (EXISTING)
-    public DeviceSession(String id, IMEI imei) {
-        this.id = id != null ? id : UUID.randomUUID().toString();
-        this.imei = imei;
-        this.createdAt = Instant.now();
-        this.lastActivityAt = Instant.now();
-        this.authenticated = false;
-        this.attributes = new HashMap<>();
-    }
-
-    // NEW: Constructor for compatibility with fixed GT06Handler
-    public DeviceSession(IMEI imei, Channel channel) {
-        this.id = UUID.randomUUID().toString();
-        this.imei = imei;
-        this.channelId = channel != null ? channel.id().asShortText() : null;
-        this.remoteAddress = channel != null && channel.remoteAddress() != null ? channel.remoteAddress().toString()
-                : "unknown";
-        this.createdAt = Instant.now();
-        this.lastActivityAt = Instant.now();
-        this.authenticated = false;
-        this.attributes = new HashMap<>();
-    }
-
-    // Constructor with all fields for Jackson deserialization (EXISTING)
     @JsonCreator
     public DeviceSession(
-            @JsonProperty("id") String id,
-            @JsonProperty("imei") IMEI imei,
-            @JsonProperty("channelId") String channelId,
-            @JsonProperty("createdAt") Instant createdAt,
-            @JsonProperty("lastActivityAt") Instant lastActivityAt,
-            @JsonProperty("authenticated") boolean authenticated,
-            @JsonProperty("remoteAddress") String remoteAddress,
-            @JsonProperty("attributes") Map<String, Object> attributes) {
+        @JsonProperty("id") String id,
+        @JsonProperty("imei") IMEI imei,
+        @JsonProperty("channelId") String channelId,
+        @JsonProperty("remoteAddress") String remoteAddress,
+        @JsonProperty("protocolVersion") String protocolVersion,
+        @JsonProperty("deviceVariant") DeviceVariant variant,
+        @JsonProperty("status") DeviceStatus status,
+        @JsonProperty("authenticated") boolean authenticated,
+        @JsonProperty("createdAt") Instant createdAt,
+        @JsonProperty("lastActivityAt") Instant lastActivityAt,
+        @JsonProperty("lastLoginAt") Instant lastLoginAt,
+        @JsonProperty("attributes") Map<String, Object> attributes
+    ) {
         this.id = id != null ? id : UUID.randomUUID().toString();
-        this.imei = imei;
+        this.imei = IMEI.of(imei.value());
         this.channelId = channelId;
+        this.remoteAddress = remoteAddress;
+        this.protocolVersion = protocolVersion != null ? protocolVersion : this.protocolVersion;
+        this.deviceVariant.set(variant != null ? variant : DeviceVariant.GT06_STANDARD);
+        this.status.set(status != null ? status : DeviceStatus.OFFLINE);
+        this.authenticated.set(authenticated);
         this.createdAt = createdAt != null ? createdAt : Instant.now();
-        this.lastActivityAt = lastActivityAt != null ? lastActivityAt : Instant.now();
-        this.authenticated = authenticated;
-        this.remoteAddress = remoteAddress;
-        this.attributes = attributes != null ? new HashMap<>(attributes) : new HashMap<>();
+        this.lastActivityAt = lastActivityAt != null ? lastActivityAt : this.createdAt;
+        this.lastLoginAt = lastLoginAt != null ? lastLoginAt : this.createdAt;
+        if (attributes != null) this.attributes.putAll(attributes);
     }
 
-    /**
-     * Create session from IMEI - factory method (EXISTING)
-     */
-    public static DeviceSession create(IMEI imei) {
-        return new DeviceSession(UUID.randomUUID().toString(), imei);
+    // Factory
+    public static DeviceSession create(IMEI imei, String channelId, String remoteAddress) {
+        var session = new DeviceSession(imei);
+        session.channelId = channelId;
+        session.remoteAddress = remoteAddress;
+        return session;
     }
 
-    /**
-     * Update activity timestamp - thread safe (EXISTING)
-     */
-    public synchronized void updateActivity() {
-        this.lastActivityAt = Instant.now();
-    }
+    // === Behavior ===
 
-    /**
-     * Authenticate the session (EXISTING)
-     */
-    public synchronized void authenticate() {
-        this.authenticated = true;
-        updateActivity();
-    }
-
-    /**
-     * Check if session is idle (EXISTING)
-     */
-    public boolean isIdle(long maxIdleSeconds) {
-        return Instant.now().isAfter(lastActivityAt.plusSeconds(maxIdleSeconds));
-    }
-
-    /**
-     * Get session duration in seconds (EXISTING)
-     */
-    @JsonIgnore
-    public long getDurationSeconds() {
-        return Instant.now().getEpochSecond() - createdAt.getEpochSecond();
-    }
-
-    /**
-     * Get idle time in seconds (EXISTING)
-     */
-    @JsonIgnore
-    public long getIdleTimeSeconds() {
-        return Instant.now().getEpochSecond() - lastActivityAt.getEpochSecond();
-    }
-
-    /**
-     * Set attribute with type safety (EXISTING)
-     */
-    public synchronized void setAttribute(String key, Object value) {
-        if (key != null) {
-            attributes.put(key, value);
-            updateActivity();
+    public void authenticate() {
+        if (authenticated.compareAndSet(false, true)) {
+            lastLoginAt = Instant.now();
+            status.set(DeviceStatus.ONLINE);
+            touch();
         }
     }
 
-    /**
-     * Get attribute with default value (EXISTING)
-     */
-    @SuppressWarnings("unchecked")
-    public <T> T getAttribute(String key, T defaultValue) {
-        Object value = attributes.get(key);
-        if (value != null) {
-            try {
-                return (T) value;
-            } catch (ClassCastException e) {
-                return defaultValue;
-            }
-        }
-        return defaultValue;
+    public void touch() {
+        lastActivityAt = Instant.now();
     }
 
-    /**
-     * Remove attribute (EXISTING)
-     */
-    public synchronized Object removeAttribute(String key) {
-        return attributes.remove(key);
+    public void disconnect() {
+        authenticated.set(false);
+        status.set(DeviceStatus.OFFLINE);
+        channelId = null;
+        touch();
     }
 
-    // ========== NEW: V5 DEVICE SUPPORT METHODS ==========
-
-    /**
-     * Get device variant (V5, SK05, etc.)
-     */
-    public String getDeviceVariant() {
-        return this.deviceVariant;
+    public void setVariant(DeviceVariant variant) {
+        deviceVariant.set(variant);
+        touch();
     }
 
-    /**
-     * Set device variant for proper handling
-     */
-    public void setDeviceVariant(String variant) {
-        this.deviceVariant = variant != null ? variant : "UNKNOWN";
-        System.out.println("Device variant set to: " + this.deviceVariant + " for session: " + this.id);
-        updateActivity();
+    public void setStatus(DeviceStatus newStatus) {
+        status.set(newStatus);
+        touch();
     }
 
-    /**
-     * Check if device has sent location data
-     */
-    public boolean hasReceivedLocationData() {
-        return hasReceivedLocationData;
-    }
-
-    /**
-     * Mark that device has sent location data
-     */
-    public void markLocationDataReceived() {
-        this.hasReceivedLocationData = true;
-        updateActivity();
-    }
-
-    /**
-     * Check if status advice has been given (to avoid spam)
-     */
-    public boolean hasReceivedStatusAdvice() {
-        return statusAdviceGiven;
-    }
-
-    /**
-     * Mark that status advice has been given
-     */
-    public void markStatusAdviceGiven() {
-        this.statusAdviceGiven = true;
-    }
-
-
-    /**
-     * Check if this is an SK05 device
-     */
-    @JsonIgnore
-    public boolean isSK05Device() {
-        return "SK05".equalsIgnoreCase(deviceVariant);
-    }
-
-    /**
-     * Check if session contains a specific key (for compatibility)
-     */
-    public boolean contains(String key) {
-        return attributes.containsKey(key);
-    }
-
-    /**
-     * Set value in session (for compatibility)
-     */
-    public void set(String key, Object value) {
-        setAttribute(key, value);
-    }
-
-    /**
-     * Get value from session (for compatibility)
-     */
-    public Object get(String key) {
-        return attributes.get(key);
-    }
-
-    // ========== EXISTING GETTERS ==========
-    public String getId() {
-        return id;
-    }
-
-    public IMEI getImei() {
-        return imei;
-    }
-
-    public String getChannelId() {
-        return channelId;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getLastActivityAt() {
-        return lastActivityAt;
-    }
-
-    public boolean isAuthenticated() {
-        return authenticated;
-    }
-
-    public String getRemoteAddress() {
-        return remoteAddress;
-    }
-
-    public Map<String, Object> getAttributes() {
-        return new HashMap<>(attributes); // Return copy for thread safety
-    }
-
-    // ========== EXISTING SETTERS ==========
-    public void setImei(IMEI imei) {
-        this.imei = imei;
-        updateActivity();
-    }
-
-    public void setChannelId(String channelId) {
+    public void setChannel(String channelId, String remoteAddress) {
         this.channelId = channelId;
-    }
-
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public void setLastActivityAt(Instant lastActivityAt) {
-        this.lastActivityAt = lastActivityAt;
-    }
-
-    public void setAuthenticated(boolean authenticated) {
-        this.authenticated = authenticated;
-    }
-
-    public void setRemoteAddress(String remoteAddress) {
         this.remoteAddress = remoteAddress;
+        touch();
     }
 
-    // ========== EXISTING UTILITY METHODS ==========
-    @Override
-    public boolean equals(Object o) {
-        if (this == o)
-            return true;
-        if (o == null || getClass() != o.getClass())
-            return false;
-        DeviceSession that = (DeviceSession) o;
-        return id.equals(that.id);
+    public void setAttribute(String key, Object value) {
+        if (value != null) attributes.put(key, value);
+        else attributes.remove(key);
+        touch();
     }
 
-    @Override
-    public int hashCode() {
-        return id.hashCode();
+    public <T> T getAttribute(String key, T defaultValue) {
+        return (T) attributes.getOrDefault(key, defaultValue);
     }
 
-    @Override
-    public String toString() {
-        return String.format(
-                "DeviceSession{id='%s', imei=%s, authenticated=%s, channelId='%s', remoteAddress='%s', variant='%s'}",
-                id, imei != null ? imei.value() : null, authenticated, channelId, remoteAddress, deviceVariant);
+    // === Queries ===
+
+    public boolean isAuthenticated()            { return authenticated.get(); }
+    public boolean isOnline()                   { return status.get() == DeviceStatus.ONLINE; }
+    public boolean isIdle(long seconds)         { return Instant.now().isAfter(lastActivityAt.plusSeconds(seconds)); }
+    public boolean isGt06()                     { return deviceVariant.get().isGt06Compatible(); }
+    public long getSessionDurationSeconds()     { return Instant.now().getEpochSecond() - createdAt.getEpochSecond(); }
+    public long getIdleTimeSeconds()            { return Instant.now().getEpochSecond() - lastActivityAt.getEpochSecond(); }
+
+    // === Getters ===
+
+    public String getId()           { return id; }
+    public IMEI getImei()           { return imei; }
+    public String getChannelId()    { return channelId; }
+    public String getRemoteAddress(){ return remoteAddress; }
+    public String getProtocolVersion() { return protocolVersion; }
+    public DeviceVariant getVariant(){ return deviceVariant.get(); }
+    public DeviceStatus getStatus()  { return status.get(); }
+    public Instant getCreatedAt()    { return createdAt; }
+    public Instant getLastActivityAt(){ return lastActivityAt; }
+    public Instant getLastLoginAt()  { return lastLoginAt; }
+    public Map<String,Object> getAttributes() { return Map.copyOf(attributes); }
+
+    // === Enums ===
+
+    public enum DeviceVariant {
+        GT06_STANDARD(true),
+        GT06_MINI(true),
+        GT06_V1_8_1(true),
+        UNKNOWN(false);
+
+        private final boolean gt06Compatible;
+        DeviceVariant(boolean ok) { this.gt06Compatible = ok; }
+        public boolean isGt06Compatible() { return gt06Compatible; }
+    }
+
+    public enum DeviceStatus {
+        OFFLINE, CONNECTING, ONLINE, IDLE, ERROR
     }
 }

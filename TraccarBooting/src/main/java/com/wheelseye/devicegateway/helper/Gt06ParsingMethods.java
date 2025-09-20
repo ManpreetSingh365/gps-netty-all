@@ -1,23 +1,16 @@
 package com.wheelseye.devicegateway.helper;
 
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.util.Optional;
-
-import com.wheelseye.devicegateway.dto.DeviceStatusDto;
 import com.wheelseye.devicegateway.dto.AlarmStatusDto;
 import com.wheelseye.devicegateway.dto.DeviceExtendedFeatureDto;
 import com.wheelseye.devicegateway.dto.DeviceIOPortsDto;
 import com.wheelseye.devicegateway.dto.DeviceLbsDataDto;
-import com.wheelseye.devicegateway.dto.LocationDto;
-import com.wheelseye.devicegateway.model.DeviceSession;
-import com.wheelseye.devicegateway.model.IMEI;
 import com.wheelseye.devicegateway.model.MessageFrame;
-import com.wheelseye.devicegateway.service.DeviceSessionService;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -27,333 +20,7 @@ import io.netty.channel.ChannelHandlerContext;
 @Component
 public class Gt06ParsingMethods {
 
-    private static final int HEADER_78 = 0x7878;
-    private static final int HEADER_79 = 0x7979;
-
-    // Offsets
-    private static final int COURSE_STATUS_OFFSET = 17;
-    private static final int IO_OFFSET = 20;
-
-    // Battery calculation
-    private static final int VOLTAGE_MIN = 3400;
-    private static final int VOLTAGE_MAX = 4200;
-
-    @Autowired
-    private DeviceSessionService sessionService;
-
     private static final Logger logger = LoggerFactory.getLogger(Gt06ParsingMethods.class);
-
-    public MessageFrame parseFrame(ByteBuf buffer) {
-        try {
-            if (buffer.readableBytes() < 5) {
-                logger.debug("Insufficient bytes for frame parsing: {}", buffer.readableBytes());
-                return null;
-            }
-
-            // Store original reader index
-            int originalIndex = buffer.readerIndex();
-
-            // Read header
-            int startBits = buffer.readUnsignedShort();
-            boolean isExtended = (startBits == HEADER_79);
-
-            // Read length
-            int length;
-            if (isExtended) {
-                if (buffer.readableBytes() < 2) {
-                    buffer.readerIndex(originalIndex);
-                    return null;
-                }
-                length = buffer.readUnsignedShort();
-            } else {
-                if (buffer.readableBytes() < 1) {
-                    buffer.readerIndex(originalIndex);
-                    return null;
-                }
-                length = buffer.readUnsignedByte();
-            }
-
-            // Validate length
-            if (length < 1 || length > 1000) {
-                logger.debug("Invalid data length: {}", length);
-                buffer.readerIndex(originalIndex);
-                return null;
-            }
-
-            // Check if we have enough data
-            int remainingForContent = length - 4; // length includes protocol, serial, and CRC
-            if (buffer.readableBytes() < remainingForContent + 4) { // +4 for serial(2) + crc(2)
-                buffer.readerIndex(originalIndex);
-                return null;
-            }
-
-            // Read protocol number
-            int protocolNumber = buffer.readUnsignedByte();
-
-            // Read content (remaining data except serial and CRC)
-            ByteBuf content = Unpooled.buffer();
-            int contentLength = remainingForContent - 1; // -1 for protocol number
-            if (contentLength > 0) {
-                content.writeBytes(buffer, contentLength);
-            }
-
-            // Read serial number
-            int serialNumber = buffer.readUnsignedShort();
-
-            // Read CRC
-            int crc = buffer.readUnsignedShort();
-
-            // Read stop bits (if available)
-            int stopBits = 0x0D0A; // Default
-            if (buffer.readableBytes() >= 2) {
-                stopBits = buffer.readUnsignedShort();
-            }
-
-            // Create hex dump for debugging
-            buffer.readerIndex(originalIndex);
-            String rawHex = "";
-            if (buffer.readableBytes() >= 8) {
-                byte[] hexBytes = new byte[Math.min(buffer.readableBytes(), 32)];
-                buffer.getBytes(buffer.readerIndex(), hexBytes);
-                rawHex = bytesToHex(hexBytes);
-            }
-
-            logger.debug("Parsed frame: startBits=0x{:04X}, length={}, protocol=0x{:02X}, serial={}, crc=0x{:04X}",
-                    startBits, length, protocolNumber, serialNumber, crc);
-
-            // return new MessageFrame(startBits, length, protocolNumber, content,
-            // serialNumber, crc, stopBits, rawHex);
-
-            return new MessageFrame(
-                    startBits,
-                    length,
-                    protocolNumber,
-                    content,
-                    serialNumber,
-                    crc,
-                    stopBits,
-                    rawHex,
-                    Instant.now(), // receivedAt
-                    null // imei
-            );
-
-        } catch (Exception e) {
-            logger.error("Error parsing GT06 frame: {}", e.getMessage(), e);
-            return null;
-        }
-    }
-
-    public IMEI extractIMEI(MessageFrame frame) {
-        try {
-            ByteBuf content = frame.content();
-
-            if (content.readableBytes() < 8) {
-                logger.warn("Insufficient bytes for IMEI extraction: {}", content.readableBytes());
-                return null;
-            }
-
-            // Read 8 bytes for BCD-encoded IMEI
-            byte[] imeiBytes = new byte[8];
-            content.readBytes(imeiBytes);
-
-            // PROPER BCD DECODING
-            StringBuilder imei = new StringBuilder();
-            for (byte b : imeiBytes) {
-                // Each byte contains two BCD digits
-                int highNibble = (b >> 4) & 0x0F;
-                int lowNibble = b & 0x0F;
-
-                // Validate BCD digits (0-9)
-                if (highNibble > 9 || lowNibble > 9) {
-                    logger.warn("Invalid BCD digit in IMEI: high={}, low={}", highNibble, lowNibble);
-                    return null;
-                }
-
-                imei.append(highNibble).append(lowNibble);
-            }
-
-            // Process the decoded IMEI string
-            String imeiStr = imei.toString();
-            logger.debug("Raw BCD decoded IMEI: '{}' (length: {})", imeiStr, imeiStr.length());
-
-            // Handle leading zero (common in GT06 protocol)
-            if (imeiStr.startsWith("0") && imeiStr.length() == 16) {
-                imeiStr = imeiStr.substring(1);
-                logger.debug("Removed leading zero: '{}'", imeiStr);
-            }
-
-            // Validate final IMEI format
-            if (imeiStr.length() != 15) {
-                logger.warn("Invalid IMEI length after processing: {} (expected 15)", imeiStr.length());
-                return null;
-            }
-
-            if (!imeiStr.matches("\\d{15}")) {
-                logger.warn("IMEI contains non-digit characters: '{}'", imeiStr);
-                return null;
-            }
-
-            logger.info("Successfully extracted IMEI: {}", imeiStr);
-            return new IMEI(imeiStr);
-
-        } catch (Exception e) {
-            logger.error("Error extracting IMEI: {}", e.getMessage(), e);
-            return null;
-        }
-    }
-
-    public ByteBuf buildGenericAck(int protocolNumber, int serialNumber) {
-        try {
-            ByteBuf response = Unpooled.buffer();
-
-            // Header (0x7878)
-            response.writeShort(HEADER_78);
-
-            // Length (5 bytes total content)
-            response.writeByte(0x05);
-
-            // Echo back the protocol number
-            response.writeByte(protocolNumber);
-
-            // Serial number (2 bytes)
-            response.writeShort(serialNumber);
-
-            // Calculate and write CRC16
-            int crc = calculateCRC16(response, 2, response.writerIndex() - 2);
-            response.writeShort(crc);
-
-            // Stop bits
-            response.writeByte(0x0D);
-            response.writeByte(0x0A);
-
-            logger.debug("Built generic ACK: protocol=0x{:02X}, serial={}, crc=0x{:04X}",
-                    protocolNumber, serialNumber, crc);
-            return response;
-
-        } catch (Exception e) {
-            logger.error("Error building generic ACK: {}", e.getMessage(), e);
-            return Unpooled.buffer();
-        }
-    }
-
-    private Optional<DeviceSession> getAuthenticatedSession(ChannelHandlerContext ctx) {
-        try {
-            Optional<DeviceSession> sessionOpt = sessionService.getSession(ctx.channel());
-
-            if (sessionOpt.isEmpty()) {
-                logger.debug("📭 No session found for channel");
-                return Optional.empty();
-            }
-
-            DeviceSession session = sessionOpt.get();
-            if (!session.isAuthenticated()) {
-                String imei = session.getImei() != null ? session.getImei().value() : "unknown";
-                logger.warn("🔐 Session NOT authenticated for IMEI: {}", imei);
-                return Optional.empty();
-            }
-
-            return sessionOpt;
-
-        } catch (Exception e) {
-            logger.error("💥 Error getting authenticated session: {}", e.getMessage(), e);
-            return Optional.empty();
-        }
-    }
-
-    public ByteBuf buildLoginAck(int serialNumber) {
-        try {
-            ByteBuf response = Unpooled.buffer();
-
-            // Header (0x7878)
-            response.writeShort(HEADER_78);
-
-            // Length (5 bytes total content)
-            response.writeByte(0x05);
-
-            // Protocol number (0x01 for login ACK)
-            response.writeByte(0x01);
-
-            // Serial number (2 bytes)
-            response.writeShort(serialNumber);
-
-            // Calculate and write CRC16
-            int crc = calculateCRC16(response, 2, response.writerIndex() - 2);
-            response.writeShort(crc);
-
-            // Stop bits
-            response.writeByte(0x0D);
-            response.writeByte(0x0A);
-
-            logger.debug("Built login ACK: serial={}, crc=0x{:04X}", serialNumber, crc);
-            return response;
-
-        } catch (Exception e) {
-            logger.error("Error building login ACK: {}", e.getMessage(), e);
-            return Unpooled.buffer();
-        }
-    }
-
-    private int calculateCRC16(ByteBuf buffer, int offset, int length) {
-        int crc = 0xFFFF;
-
-        for (int i = offset; i < offset + length; i++) {
-            int data = buffer.getByte(i) & 0xFF;
-            crc ^= data;
-
-            for (int j = 0; j < 8; j++) {
-                if ((crc & 0x0001) != 0) {
-                    crc = (crc >> 1) ^ 0x8408;
-                } else {
-                    crc >>= 1;
-                }
-            }
-        }
-
-        return (~crc) & 0xFFFF;
-    }
-
-    public DeviceStatusDto parseDeviceStatus(ByteBuf content) {
-        try {
-            content.resetReaderIndex();
-
-            if (content.readableBytes() < COURSE_STATUS_OFFSET + 2) {
-                return DeviceStatusDto.getDefaultDeviceStatus();
-            }
-
-            // Satellites
-            content.skipBytes(7);
-            int satellites = content.readableBytes() > 0 ? content.readUnsignedByte() : 0;
-
-            // Course/status word
-            content.resetReaderIndex();
-            content.skipBytes(COURSE_STATUS_OFFSET);
-            int courseStatus = content.readableBytes() >= 2 ? content.readUnsignedShort() : 0;
-
-            boolean ignition = (courseStatus & 0x2000) != 0;
-            boolean gpsFixed = (courseStatus & 0x1000) != 0;
-            int direction = courseStatus & 0x03FF;
-            boolean externalPower = (courseStatus & 0x4000) != 0;
-
-            int batteryVoltage = externalPower ? (ignition ? 4200 : 4100) : (ignition ? 3900 : 3700);
-            int batteryPercent = Math.max(0,
-                    Math.min(100, (batteryVoltage - VOLTAGE_MIN) * 100 / (VOLTAGE_MAX - VOLTAGE_MIN)));
-            boolean charging = externalPower && batteryVoltage > 4000;
-
-            int gsmSignal = gpsFixed ? (satellites > 6 ? -65 : satellites > 4 ? -75 : -85) : -95;
-            int signalLevel = Math.max(1, Math.min(5, (gsmSignal + 110) / 20));
-
-            String batteryLevelText = getBatteryLevelText(batteryPercent);
-            String voltageLevelText = getVoltageLevelText(batteryVoltage);
-
-            return new DeviceStatusDto(ignition, ignition ? 1 : 0, gpsFixed, direction, satellites, externalPower,
-                    charging, batteryVoltage, batteryPercent, batteryLevelText, voltageLevelText, gsmSignal,
-                    signalLevel, courseStatus);
-
-        } catch (Exception e) {
-            logger.error("Error parsing device status: {}", e.getMessage(), e);
-            return DeviceStatusDto.getDefaultDeviceStatus();
-        }
-    }
 
     public DeviceIOPortsDto parseIOPorts(ByteBuf content, double gpsSpeed) {
         try {
@@ -532,30 +199,6 @@ public class Gt06ParsingMethods {
         }
     }
 
-    private String getBatteryLevelText(int batteryPercent) {
-        if (batteryPercent > 80)
-            return "Full";
-        if (batteryPercent > 60)
-            return "High";
-        if (batteryPercent > 40)
-            return "Medium";
-        if (batteryPercent > 20)
-            return "Low";
-        return "Critical";
-    }
-
-    private String getVoltageLevelText(int voltage) {
-        if (voltage > 4100)
-            return "Excellent";
-        if (voltage > 3900)
-            return "Good";
-        if (voltage > 3700)
-            return "Normal";
-        if (voltage > 3500)
-            return "Weak";
-        return "Very Weak";
-    }
-
     public String getOperatorName(int mcc, int mnc) {
         if (mcc == 404) { // India
             return switch (mnc) {
@@ -572,12 +215,105 @@ public class Gt06ParsingMethods {
         return "Unknown";
     }
 
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder result = new StringBuilder();
-        for (byte b : bytes) {
-            result.append(String.format("%02x", b));
+    // ------------------------------------------------
+    private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String imei, String remoteAddress,
+            MessageFrame frame) {
+        try {
+            content.resetReaderIndex();
+            String fullRawPacket = ByteBufUtil.hexDump(content);
+            String serverTimestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "Z";
+            int frameLen = content.readableBytes();
+
+            // Parse all data sections
+            DeviceLbsDataDto lbs = parseLBSData(content);
+            AlarmStatusDto alarmData = parseAlarms(content);
+            DeviceExtendedFeatureDto featureData = parseExtendedFeatures(content);
+
+            logger.info("📡 Device Report Log ===========================================>");
+            // 🕒 TIMESTAMP SECTION -------------------->
+            logger.info("🕒 Timestamp -------------------->");
+            logger.info("   📩 Server Time : {}", serverTimestamp);
+            logger.info("   📡 RemoteAddress : {}", remoteAddress);
+            logger.info("   📡 IMEI        : {}", imei);
+            logger.info("   📦 Protocol      : 0x{} ({})", String.format("%02X", frame.protocolNumber()),
+                    protocolName(frame.protocolNumber()));
+            logger.info("   🔑 Raw Packet    : {}", fullRawPacket);
+            logger.info("   📏 FrameLen      : {}   | Checksum : ✅ OK  | Duration : {}ms ", frameLen,
+                    System.currentTimeMillis() % 100);
+
+            // 🔌 Device I/O Ports -------------------->
+            logger.info(" 🔌 Device I/O Ports -------------------->");
+            // logger.info(" 🗃️ I/O Hex : {}", ioData.ioHex());
+            // logger.info(" 🔑 IN1 / Ignition : {}", ioData.ignition() ? "ON ✅" : "OFF ❌");
+            // logger.info(" 🛰️ Motion : {}", ioData.motion());
+            // logger.info(" 🔌 IN2 : {}", ioData.input2());
+            // logger.info(" 🔌 OUT1 (Relay) : {}", ioData.out1());
+            // logger.info(" 🔌 OUT2 (Relay) : {}", ioData.out2());
+            // logger.info(" ⚡ ADC1 Voltage : {} V",
+            // ioData.adc1Voltage() != null ? String.format("%.2f", ioData.adc1Voltage()) :
+            // "N/A");
+            // logger.info(" ⚡ ADC2 Voltage : {} V",
+            // ioData.adc2Voltage() != null ? String.format("%.2f", ioData.adc2Voltage()) :
+            // "N/A");
+
+            // 📡 LBS Data -------------------->
+            logger.info("📡 LBS Data -------------------->");
+            logger.info("   🗃️ Raw Hex    : {}", lbs.lbsHex());
+            logger.info("   🌐 MCC        : {}", lbs.mcc());
+            logger.info("   📶 MNC        : {}", lbs.mnc());
+            logger.info("   🗼 LAC        : {}", lbs.lac());
+            logger.info("   🗼 CID        : {}", lbs.cid());
+            logger.info("   📡 RSSI       : {} dBm", lbs.rssi());
+
+            // 🚨 Alarm Data -------------------->
+            logger.info("🚨 GT06 Alarm Data -------------------->");
+            logger.info("   🗃️ Raw Hex          : 0x{}", alarmData.alarmHex());
+            logger.info("   🆘 SOS Alarm        : {}", alarmData.sosAlarm() ? "TRIGGERED" : "OFF");
+            logger.info("   💥 Vibration Alarm  : {}", alarmData.vibrationAlarm() ? "TRIGGERED" : "OFF");
+            logger.info("   🛠️ Tamper Alarm     : {}", alarmData.tamperAlarm() ? "TRIGGERED" : "OFF");
+            logger.info("   🔋 Low Battery      : {}", alarmData.lowBatteryAlarm() ? "TRIGGERED" : "OK");
+            logger.info("   ⚡ Over-speed Alarm : {}", alarmData.overSpeedAlarm() ? "YES" : "NO");
+            logger.info("   🅿️ Idle Alarm       : {}", alarmData.idleAlarm() ? "ACTIVE" : "OFF");
+
+            // ⚙️ GT06 Extended Features -------------------->
+            logger.info("⚙️ GT06 Extended Features -------------------->");
+            logger.info("   🗃️ Raw Hex            : 0x{}", featureData.featureHex());
+            logger.info("   📩 SMS Commands       : {}", featureData.smsCommands() ? "SUPPORTED" : "NOT SUPPORTED");
+            logger.info("   😴 Sleep Mode         : {}", featureData.sleepMode() ? "ACTIVE" : "OFF");
+            logger.info("   ⏱️ Upload Interval    : {} sec", featureData.uploadInterval());
+            logger.info("   📏 Distance Upload    : {} meters", featureData.distanceUpload());
+            logger.info("   ❤️ Heartbeat Interval : {} sec", featureData.heartbeatInterval());
+            logger.info("   📶 Cell Scan Count    : {}", featureData.cellScanCount());
+            logger.info("   📨 Backup Mode        : {}", featureData.backupMode());
+
+            logger.info("📡 Device Report Log <=========================================== END");
+
+        } catch (Exception e) {
+            logger.error("💥 Enhanced GT06 parsing error for IMEI {}: {}", imei, e.getMessage(), e);
         }
-        return result.toString();
+    }
+
+    /**
+     * Map GT06 protocol number → human-readable name.
+     * Covers Login, Location, Status, Alarm, LBS, Command, Heartbeat, etc.
+     */
+    private String protocolName(int proto) {
+        return switch (proto) {
+            case 0x01 -> "Login";
+            case 0x05 -> "Heartbeat";
+            case 0x08 -> "GPS Location (old type)";
+            case 0x10 -> "LBS Location";
+            case 0x12 -> "GPS Location (0x12 type)";
+            case 0x13 -> "Status Info";
+            case 0x15 -> "String Information";
+            case 0x16 -> "Alarm Packet";
+            case 0x1A -> "Extended Status Info";
+            case 0x80 -> "Command Response (0x80)";
+            case 0x8A -> "Command Response (0x8A)";
+            case 0x94 -> "GPS Location (0x94 type)";
+            case 0x97 -> "OBD / Extended Data (some models)";
+            default -> String.format("Unknown (0x%02X)", proto);
+        };
     }
 
 }

@@ -4,19 +4,13 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import com.wheelseye.devicegateway.config.KafkaConfig.KafkaAdapter;
-import com.wheelseye.devicegateway.dto.AlarmStatusDto;
-import com.wheelseye.devicegateway.dto.DeviceExtendedFeatureDto;
-import com.wheelseye.devicegateway.dto.DeviceLbsDataDto;
 import com.wheelseye.devicegateway.dto.DeviceStatusDto;
 import com.wheelseye.devicegateway.helper.ChannelRegistry;
 import com.wheelseye.devicegateway.helper.Gt06Handler;
-import com.wheelseye.devicegateway.helper.Gt06ParsingMethods;
 import com.wheelseye.devicegateway.model.DeviceSession;
 import com.wheelseye.devicegateway.model.IMEI;
 import com.wheelseye.devicegateway.model.MessageFrame;
@@ -27,28 +21,14 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.util.AttributeKey;
 import io.netty.buffer.Unpooled;
 
-/**
- * FINAL FIX - GT06 Handler - VARIANT PERSISTENCE ISSUE RESOLVED
- * 
- * CRITICAL FIX:
- * 1. ✅ DEVICE VARIANT PERSISTENCE - Variant properly persists from login to
- * status processing
- * 2. ✅ V5 DEVICE LOGIC - Uses correct V5 logic when variant is properly
- * detected
- * 3. ✅ NO KAFKA CALLS - Location displayed immediately without Kafka
- * 4. ✅ CONNECTION PERSISTENCE - Connections stay open after login
- * 5. ✅ ALL PROTOCOL SUPPORT - Complete protocol coverage including 0x94
- */
 @Component
 @ChannelHandler.Sharable
 public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
 
     private static final Logger logger = LoggerFactory.getLogger(Gt06ProtocolDecoder.class);
-
-    @Autowired
-    private Gt06ParsingMethods gt06ParsingMethods;
 
     @Autowired
     private DeviceSessionService sessionService;
@@ -143,12 +123,21 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
     public static final int MSG_WIFI_4 = 0xF3; // WiFi variant 4 [63]
     // ============================================================================
 
-    private final KafkaAdapter kafkaAdapter;
-    private final Gt06Handler gt06Handler;
+    private static final AttributeKey<DeviceSession> SESSION_KEY = AttributeKey.valueOf("device.session");
+    private static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    // private static final String UNKNOWN_IMEI = "000000000000000";
+    // private static final String UNKNOWN_VARIANT = "UNKNOWN";
 
-    public Gt06ProtocolDecoder(KafkaAdapter kafkaAdapter, Gt06Handler gt06Handler) {
-        this.kafkaAdapter = kafkaAdapter;
+    private static final int COURSE_STATUS_OFFSET = 12; // Replace with actual offset in your packet structure
+    private static final int VOLTAGE_MIN = 3600; // Minimum battery voltage for scaling
+    private static final int VOLTAGE_MAX = 4200; // Maximum battery voltage for scaling
+
+    private final Gt06Handler gt06Handler;
+    private final Gt06FrameDecoder gt06FrameDecoder;
+
+    public Gt06ProtocolDecoder(Gt06Handler gt06Handler, Gt06FrameDecoder gt06FrameDecoder) {
         this.gt06Handler = gt06Handler;
+        this.gt06FrameDecoder = gt06FrameDecoder;
     }
 
     @Override
@@ -173,7 +162,7 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
             logger.info("📥 RAW DATA RECEIVED from {}: {} bytes - {}",
                     remoteAddress, buffer.readableBytes(), hexDump);
 
-            MessageFrame frame = gt06ParsingMethods.parseFrame(buffer);
+            MessageFrame frame = gt06FrameDecoder.parseFrame(buffer);
             if (frame == null) {
                 logger.warn("❌ Failed to parse frame from {}", remoteAddress);
                 return;
@@ -199,15 +188,13 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
         int type = frame.protocolNumber();
         String addr = ctx.channel().remoteAddress().toString();
 
-        logger.info("📍 LOCATION PACKET (0x{:02X}) from {}", type, addr);
         try {
             if (isLocationType(type)) {
                 logger.info("📍 LOCATION PACKET (0x{:02X}) from {}", type, addr);
                 handleLocation(ctx, frame);
             } else if (isStatusType(type)) {
                 logger.info("📊 STATUS PACKET (0x{:02X}) from {}", type, addr);
-                // handleStatus(ctx, frame);
-
+                handleStatus(ctx, frame);
             } else if (isLbsType(type)) {
                 logger.info("📶 LBS PACKET (0x{:02X}) from {}", type, addr);
                 // handleLbs(ctx, frame);
@@ -311,9 +298,7 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
             Instant timestamp = dateTime.toInstant(ZoneOffset.UTC);
 
             boolean isGps = (frame.protocolNumber() & 0xF0) == 0x10;
-            logger.info("check gps is valid?");
             if (isGps) {
-                logger.info("gps is valid ...............");
 
                 // Parse satellites
                 int satellitesByte = buf.readUnsignedByte();
@@ -345,8 +330,8 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
                 // **INDIA REGION FIX** - Force Eastern hemisphere for India coordinates
                 if (latitude > 8.0 && latitude < 37.0 && longitude < 0 && Math.abs(longitude) >= 68.0
                         && Math.abs(longitude) <= 97.0) {
-                    logger.info("🔧 India region detected - correcting longitude from {} to {}", longitude,
-                            Math.abs(longitude));
+                    // logger.info("🔧 India region detected - correcting longitude from {} to {}",
+                    // longitude, Math.abs(longitude));
                     longitude = Math.abs(longitude);
                 }
 
@@ -369,6 +354,7 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
             // int cid = buf.readUnsignedMedium();
             // publishCell(ctx, timestamp, mcc, mnc, lac, cid);
             // }
+
             sendAck(ctx, frame, frame.protocolNumber());
 
             // return new LocationDto(timestamp, gpsValid, latitude, longitude, speed,
@@ -379,14 +365,71 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
         }
     }
 
-    // private void handleStatus(ChannelHandlerContext ctx, MessageFrame frame) {
-    // ByteBuf buf = frame.content();
-    // int status = buf.readUnsignedByte();
-    // boolean ignition = ((status >> 1) & 1) == 1;
-    // boolean charge = ((status >> 2) & 1) == 1;
-    // publishStatus(ctx, ignition, charge);
-    // sendAck(ctx, frame, MSG_STATUS);
-    // }
+    private void handleStatus(ChannelHandlerContext ctx, MessageFrame frame) {
+        ByteBuf buf = frame.content();
+        try {
+            buf.resetReaderIndex();
+
+            int readable = buf.readableBytes();
+            if (readable < 10) { // minimum status packet length
+                gt06Handler.publishStatus(ctx, DeviceStatusDto.getDefaultDeviceStatus());
+                sendAck(ctx, frame, MSG_STATUS);
+                return;
+            }
+
+            // --- Course/Status word (offset 4-5) ---
+            buf.resetReaderIndex().skipBytes(4);
+            int courseStatus = readable >= 6 ? buf.readUnsignedShort() : 0;
+            boolean ignition = (courseStatus & 0x2000) != 0;
+            boolean gpsFixed = (courseStatus & 0x1000) != 0;
+            int direction = courseStatus & 0x03FF;
+            boolean externalPower = (courseStatus & 0x4000) != 0;
+
+            // --- Voltage level (offset 6) ---
+            int voltageLevel = 0;
+            if (readable >= 7) {
+                buf.resetReaderIndex().skipBytes(6);
+                voltageLevel = buf.readUnsignedByte();
+            }
+            int batteryVoltage = voltageLevel * 20; // scale adjustment
+            int batteryPercent = Math.max(0, Math.min(100, voltageLevel * 100 / 255));
+
+            // --- GSM signal (offset 7) ---
+            // --- GSM signal (offset 7) ---
+            int gsmRaw = (readable >= 8) ? buf.getUnsignedByte(buf.readerIndex() + 7) : 0;
+
+            // GSM mapping: index = gsmRaw (1-5), values = signal dBm
+            int[] gsmSignals = { -113, -103, -93, -83, -73, -63 }; // index 0 unused, 1-5 used
+            int gsmLevel = (gsmRaw >= 1 && gsmRaw <= 5) ? gsmRaw : 0;
+            int gsmSignal = (gsmRaw >= 1 && gsmRaw <= 5) ? gsmSignals[gsmRaw] : -113;
+
+            // --- Terminal info / charging (offset 8) ---
+            int terminalInfo = 0;
+            if (readable >= 9) {
+                buf.resetReaderIndex().skipBytes(8);
+                terminalInfo = buf.readUnsignedByte();
+            }
+            boolean charging = (terminalInfo & 0x04) != 0;
+
+            // --- Satellites ---
+            int satellites = gpsFixed ? 1 : 0;
+
+            // --- Build and publish DTO ---
+            DeviceStatusDto status = new DeviceStatusDto(ignition, gpsFixed, direction,
+                    satellites, externalPower,
+                    charging, batteryVoltage, batteryPercent,
+                    getBatteryLevelText(batteryPercent),
+                    getVoltageLevelText(batteryVoltage), gsmSignal, gsmLevel, courseStatus);
+
+            gt06Handler.publishStatus(ctx, status);
+            sendAck(ctx, frame, MSG_STATUS);
+
+        } catch (Exception e) {
+            logger.error("Error handling GT06 status packet: {}", e.getMessage(), e);
+            gt06Handler.publishStatus(ctx, DeviceStatusDto.getDefaultDeviceStatus());
+            sendAck(ctx, frame, MSG_STATUS);
+        }
+    }
 
     // private void handleLbs(ChannelHandlerContext ctx, MessageFrame frame) {
     // handleLocation(ctx, frame);
@@ -453,339 +496,146 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
     // sendAck(ctx, frame, frame.protocolNumber());
     // }
 
-    // Stub methods for publish/send/register
-    private void registerDevice(Channel channel, String imei) {
-        /* ... */ }
-
-    // private void publishLocation(ChannelHandlerContext ctx, LocalDateTime time,
-    // double lat, double lon, int speed, boolean valid) {
-    // /* ... */ }
-
-    // private void publishCell(ChannelHandlerContext ctx, LocalDateTime time,
-    // int mcc, int mnc, int lac, int cid) {
-    // /* ... */ }
-
-    // private void publishStatus(ChannelHandlerContext ctx, boolean ign, boolean
-    // charge) {
-    // /* ... */ }
-
-    // private void publishWifi(ChannelHandlerContext ctx, byte[] mac, int rssi) {
-    // /* ... */ }
-
-    // private void publishCommandResult(ChannelHandlerContext ctx, int cmd) {
-    // /* ... */ }
-
-    // private void publishAddress(ChannelHandlerContext ctx, String addr) {
-    // /* ... */ }
-
-    private void publishAlarm(ChannelHandlerContext ctx, int event) {
-        /* ... */ }
-
-    // private void publishInfo(ChannelHandlerContext ctx, double power) {
-    // /* ... */ }
-
-    // private void sendAck(ChannelHandlerContext ctx, MessageFrame frame, int type)
-    // {
-    // /* ... */ }
-
-    private void sendCustom(ChannelHandlerContext ctx, MessageFrame frame,
-            int type, ByteBuf content) {
-        /* ... */ }
-
-    /**
-     * Publish a cell (LBS) reading to downstream.
-     */
-    // private void publishCell(ChannelHandlerContext ctx,
-    // LocalDateTime timestamp,
-    // int mcc,
-    // int mnc,
-    // int lac,
-    // int cid) {
-    // DeviceLbsDataDto dto = new DeviceLbsDataDto(timestamp, mcc, mnc, lac, cid);
-    // kafkaAdapter.sendMessage("device-lbs", dto.toByteArray());
-    // }
-
-    // /**
-    // * Publish status (heartbeat) information.
-    // */
-    // private void publishStatus(ChannelHandlerContext ctx,
-    // boolean ignitionOn,
-    // boolean charging) {
-    // DeviceStatusDto dto = new DeviceStatusDto();
-    // dto.ignition(ignitionOn);
-    // dto.charging(charging);
-    // kafkaAdapter.sendMessage("device-status", dto.toByteArray());
-    // }
-
-    // /**
-    // * Publish received Wi-Fi scan result.
-    // */
-    // private void publishWifi(ChannelHandlerContext ctx, byte[] mac, int rssi) {
-    // DeviceIOPortsDto dto = new DeviceIOPortsDto();
-    // dto.wifiMac(mac);
-    // dto.rssi(rssi);
-    // kafkaAdapter.sendMessage("device-wifi", dto.toByteArray());
-    // }
-
-    // /**
-    // * Publish a command response from server to terminal.
-    // */
-    // private void publishCommandResult(ChannelHandlerContext ctx, int cmd) {
-    // DeviceExtendedFeatureDto dto = new DeviceExtendedFeatureDto();
-    // dto.command(cmd);
-    // kafkaAdapter.sendMessage("device-cmd", dto.toByteArray());
-    // }
-
-    // /**
-    // * Publish address response coming back from terminal.
-    // */
-    // private void publishAddress(ChannelHandlerContext ctx, String address) {
-    // AlarmStatusDto dto = new AlarmStatusDto();
-    // dto.address(address);
-    // kafkaAdapter.sendMessage("device-address", dto.toByteArray());
-    // }
-
-    // /**
-    // * Publish battery/power info from INFO packet.
-    // */
-    // private void publishInfo(ChannelHandlerContext ctx, double voltage) {
-    // DeviceExtendedFeatureDto dto = new DeviceExtendedFeatureDto();
-    // dto.batteryVoltage(voltage);
-    // kafkaAdapter.sendMessage("device-info", dto.toByteArray());
-    // }
-
-    // FIXED: Comprehensive login handling with session persistence and ACK
-    // private void handleLogin(ChannelHandlerContext ctx, MessageFrame frame) {
-    // ByteBuf buf = frame.content();
-    // byte[] imeiBytes = new byte[8];
-    // buf.readBytes(imeiBytes);
-    // String imei = io.netty.buffer.ByteBufUtil.hexDump(imeiBytes).substring(1);
-    // buf.readShort(); // skip protocol byte
-    // registerDevice(ctx.channel(), imei);
-    // sendAck(ctx, frame, MSG_LOGIN);
-    // }
-
     private void handleLogin(ChannelHandlerContext ctx, MessageFrame frame) {
         String remoteAddress = ctx.channel().remoteAddress().toString();
 
         try {
-            String loginHex = ByteBufUtil.hexDump(frame.content());
-            logger.info("🔐 LOGIN frame content: {}", loginHex);
-
-            IMEI imei = gt06ParsingMethods.extractIMEI(frame);
-            if (imei == null) {
-                logger.warn("❌ Failed to extract IMEI from login frame from {}", remoteAddress);
+            // Validate frame length for GT06 login (minimum 8 bytes for IMEI)
+            if (frame.content().readableBytes() < 8) {
+                logger.warn("🔐 LOGIN frame too short from {} ({} bytes)",
+                        remoteAddress, frame.content().readableBytes());
+                sendAck(ctx, frame, MSG_LOGIN);
                 ctx.close();
                 return;
             }
 
-            logger.info("🔐 Login request from IMEI: {}", imei.value());
-
-            DeviceSession session = DeviceSession.create(imei);
-            session.setChannelId(ctx.channel().id().asShortText());
-            session.setRemoteAddress(remoteAddress);
-
-            session.authenticate();
-
-            // Save session BEFORE sending ACK to ensure persistence
-            sessionService.saveSession(session);
-
-            // Verify the save worked
-            Optional<DeviceSession> savedSession = sessionService.getSession(ctx.channel());
-            if (savedSession.isPresent()) {
-                String savedVariant = savedSession.get().getDeviceVariant();
-                logger.info("✅ Session saved successfully - Variant verified: {} for IMEI: {}",
-                        savedVariant, imei.value());
-            } else {
-                logger.error("❌ Session save failed for IMEI: {}", imei.value());
+            // Extract and validate IMEI from BCD-encoded bytes
+            String imei = extractIMEI(frame.content());
+            if (imei == null || imei.length() < 14) {
+                logger.warn("🔐 Invalid IMEI from {}: {}", remoteAddress, imei);
+                sendAck(ctx, frame, MSG_LOGIN);
+                ctx.close();
+                return;
             }
 
-            logger.info("✅ Session authenticated and saved for IMEI: {} (Session ID: {}, Variant: {})",
-                    imei.value(), session.getId(), session.getDeviceVariant());
+            logger.info("🔐 Login from IMEI: {} ({})", imei, remoteAddress);
 
-            ByteBuf ack = gt06ParsingMethods.buildLoginAck(frame.serialNumber());
-            ctx.writeAndFlush(ack).addListener(future -> {
-                if (future.isSuccess()) {
-                    logger.info("✅ Login ACK sent to {} (IMEI: {})", remoteAddress, imei.value());
-                    logger.info("🔄 Connection kept open for further communication from IMEI: {}", imei.value());
-                } else {
-                    logger.error("❌ Failed to send login ACK to {}", remoteAddress);
-                    ctx.close();
-                }
-            });
+            // Register/authenticate device session
+            boolean registered = authenticateDevice(ctx.channel(), imei);
+            if (!registered) {
+                logger.warn("❌ Failed to register IMEI: {}", imei);
+                sendAck(ctx, frame, MSG_LOGIN);
+                ctx.close();
+                return;
+            }
+
+            // Send acknowledgment
+            sendAck(ctx, frame, MSG_LOGIN);
+            logger.info("✅ Login successful for IMEI: {} ({})", imei, remoteAddress);
 
         } catch (Exception e) {
-            logger.error("💥 Error handling login from {}: {}", remoteAddress, e.getMessage(), e);
+            logger.error("💥 Login error from {}: {}", remoteAddress, e.getMessage(), e);
+            try {
+                sendAck(ctx, frame, MSG_LOGIN);
+            } catch (Exception ignore) {
+                /* best-effort */ }
             ctx.close();
         }
     }
 
-    // * FIXED: Log device report with complete device status, location data, LBS
-    // info, alarms, and debugging data.
-    private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String imei, String remoteAddress,
-            MessageFrame frame) {
+    private String extractIMEI(ByteBuf content) {
         try {
-            content.resetReaderIndex();
-            String fullRawPacket = ByteBufUtil.hexDump(content);
-            String serverTimestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "Z";
-            int frameLen = content.readableBytes();
+            if (content.readableBytes() < 8) {
+                logger.warn("Insufficient bytes for IMEI extraction: {}", content.readableBytes());
+                return null;
+            }
 
-            // Parse all data sections
-            // LocationDto location = gt06ParsingMethods.parseLocation(content);
-            DeviceStatusDto deviceStatus = gt06ParsingMethods.parseDeviceStatus(content);
-            // DeviceIOPortsDto ioData = gt06ParsingMethods.parseIOPorts(content,
-            // location.speed());
-            DeviceLbsDataDto lbs = gt06ParsingMethods.parseLBSData(content);
-            AlarmStatusDto alarmData = gt06ParsingMethods.parseAlarms(content);
-            DeviceExtendedFeatureDto featureData = gt06ParsingMethods.parseExtendedFeatures(content);
+            int readerIndex = content.readerIndex();
+            byte[] data = new byte[8];
+            content.getBytes(readerIndex, data);
 
-            logger.info("📡 Device Report Log ===========================================>");
-            // 🕒 TIMESTAMP SECTION -------------------->
-            logger.info("🕒 Timestamp -------------------->");
-            logger.info("   📩 Server Time : {}", serverTimestamp);
-            logger.info("   📡 RemoteAddress : {}", remoteAddress);
-            logger.info("   📡 IMEI        : {}", imei);
-            logger.info("   📦 Protocol      : 0x{} ({})", String.format("%02X", frame.protocolNumber()),
-                    protocolName(frame.protocolNumber()));
-            logger.info("   🔑 Raw Packet    : {}", fullRawPacket);
-            logger.info("   📏 FrameLen      : {}   | Checksum : ✅ OK  | Duration : {}ms ", frameLen,
-                    System.currentTimeMillis() % 100);
+            StringBuilder imei = new StringBuilder(16);
 
-            // 🌍 LOCATION DATA -------------------->
-            // logger.info("🌍 Location Data -------------------->");
-            // logger.info(" 🗓️ PktTime : {}", location.timestamp());
-            // logger.info(String.format(" 📍 Lat/Lon : %.6f° %s , %.6f° %s",
-            // Math.abs(location.latitude()),
-            // location.latitude() >= 0 ? "N" : "S", Math.abs(location.longitude()),
-            // location.longitude() >= 0 ? "E" : "W"));
-            // logger.info(" 🚗 Speed : {} km/h 🧭 Heading : {}°", location.speed(),
-            // location.course());
-            // logger.info(" 🛰️ Satellites : {}", location.satellites());
-            // // Accuracy (~ meters) → ❌ Not in GT06 packet (server usually estimates from
-            // // satellite count).
-            // logger.info(" 🎯 Accuracy : ~{} m", location.accuracy());
-            // logger.info(" 🔄 GPS Status : {}", location.gpsValid() ? "Valid" :
-            // "Invalid");
-            // // Fix Type (2D/3D) → Derived from satellites count, not raw in packet.
-            // logger.info(" 🔄 Fix Type : {}",
-            // location.satellites() >= 4 ? "3D Fix" : (location.satellites() >= 2 ? "2D
-            // Fix" : "No Fix"));
-            // logger.info(" #️⃣ Serial : {} 🏷️ Event : Normal Tracking (0x{})",
-            // frame.serialNumber(),
-            // String.format("%02X", frame.protocolNumber()));
+            for (byte b : data) {
+                int high = (b & 0xF0) >>> 4;
+                int low = b & 0x0F;
 
-            // 🔋 DEVICE STATUS -------------------->
-            logger.info("🔋 Device Status -------------------->");
-            logger.info("   🗃️ Packet      : 0x{}", Integer.toHexString(deviceStatus.statusBits()));
-            logger.info("   🔑 Ignition    : {} (ACC={})   🔦 ACC Line : {}", deviceStatus.ignition() ? "ON" : "OFF",
-                    deviceStatus.accRaw(), deviceStatus.ignition() ? "Active" : "Inactive");
-            logger.info("   🔌 Battery     : {} mV ({} V, {}%)   🔋 Ext Power : {}", deviceStatus.batteryVoltage(),
-                    String.format("%.1f", deviceStatus.batteryVoltage() / 1000.0), deviceStatus.batteryPercent(),
-                    deviceStatus.externalPower() ? "Connected" : "Disconnected");
-            logger.info("   ⚡ Charging    : {} {}", deviceStatus.charging() ? "✅" : "❌",
-                    deviceStatus.charging() ? "Yes" : "No");
-            logger.info("   📡 GSM Signal  : {} dBm   📶 Level : {}", deviceStatus.gsmSignal(),
-                    deviceStatus.signalLevel());
-            logger.info("   🛰️ GPS Fixed   : {}   🧭 Direction : {}°   🛰️ Satellites : {}",
-                    deviceStatus.gpsFixed() ? "Yes" : "No", deviceStatus.direction(), deviceStatus.satellites());
-            logger.info("   🔋 Battery Lvl : {}   🔌 Voltage Lvl : {}", deviceStatus.batteryLevelText(),
-                    deviceStatus.voltageLevelText());
+                if (high != 0x0F) {
+                    if (high > 9) {
+                        logger.warn("Invalid high nibble in IMEI byte: {}", high);
+                        return null;
+                    }
+                    imei.append(high);
+                }
 
-            // 🔌 Device I/O Ports -------------------->
-            logger.info(" 🔌 Device I/O Ports -------------------->");
-            // logger.info(" 🗃️ I/O Hex : {}", ioData.ioHex());
-            // logger.info(" 🔑 IN1 / Ignition : {}", ioData.ignition() ? "ON ✅" : "OFF ❌");
-            // logger.info(" 🛰️ Motion : {}", ioData.motion());
-            // logger.info(" 🔌 IN2 : {}", ioData.input2());
-            // logger.info(" 🔌 OUT1 (Relay) : {}", ioData.out1());
-            // logger.info(" 🔌 OUT2 (Relay) : {}", ioData.out2());
-            // logger.info(" ⚡ ADC1 Voltage : {} V",
-            // ioData.adc1Voltage() != null ? String.format("%.2f", ioData.adc1Voltage()) :
-            // "N/A");
-            // logger.info(" ⚡ ADC2 Voltage : {} V",
-            // ioData.adc2Voltage() != null ? String.format("%.2f", ioData.adc2Voltage()) :
-            // "N/A");
+                if (low != 0x0F) {
+                    if (low > 9) {
+                        logger.warn("Invalid low nibble in IMEI byte: {}", low);
+                        return null;
+                    }
+                    imei.append(low);
+                }
+            }
 
-            // 📡 LBS Data -------------------->
-            logger.info("📡 LBS Data -------------------->");
-            logger.info("   🗃️ Raw Hex    : {}", lbs.lbsHex());
-            logger.info("   🌐 MCC        : {}", lbs.mcc());
-            logger.info("   📶 MNC        : {}", lbs.mnc());
-            logger.info("   🗼 LAC        : {}", lbs.lac());
-            logger.info("   🗼 CID        : {}", lbs.cid());
-            logger.info("   📡 RSSI       : {} dBm", lbs.rssi());
+            // ✅ Fix: drop leading zero if length = 16
+            if (imei.length() == 16 && imei.charAt(0) == '0') {
+                imei.deleteCharAt(0);
+            }
 
-            // 🚨 Alarm Data -------------------->
-            logger.info("🚨 GT06 Alarm Data -------------------->");
-            logger.info("   🗃️ Raw Hex          : 0x{}", alarmData.alarmHex());
-            logger.info("   🆘 SOS Alarm        : {}", alarmData.sosAlarm() ? "TRIGGERED" : "OFF");
-            logger.info("   💥 Vibration Alarm  : {}", alarmData.vibrationAlarm() ? "TRIGGERED" : "OFF");
-            logger.info("   🛠️ Tamper Alarm     : {}", alarmData.tamperAlarm() ? "TRIGGERED" : "OFF");
-            logger.info("   🔋 Low Battery      : {}", alarmData.lowBatteryAlarm() ? "TRIGGERED" : "OK");
-            logger.info("   ⚡ Over-speed Alarm : {}", alarmData.overSpeedAlarm() ? "YES" : "NO");
-            logger.info("   🅿️ Idle Alarm       : {}", alarmData.idleAlarm() ? "ACTIVE" : "OFF");
+            // ✅ Validate length
+            if (imei.length() != 15) {
+                logger.warn("Invalid IMEI length {} after decoding: {}", imei.length(), imei);
+                return null;
+            }
 
-            // ⚙️ GT06 Extended Features -------------------->
-            logger.info("⚙️ GT06 Extended Features -------------------->");
-            logger.info("   🗃️ Raw Hex            : 0x{}", featureData.featureHex());
-            logger.info("   📩 SMS Commands       : {}", featureData.smsCommands() ? "SUPPORTED" : "NOT SUPPORTED");
-            logger.info("   😴 Sleep Mode         : {}", featureData.sleepMode() ? "ACTIVE" : "OFF");
-            logger.info("   ⏱️ Upload Interval    : {} sec", featureData.uploadInterval());
-            logger.info("   📏 Distance Upload    : {} meters", featureData.distanceUpload());
-            logger.info("   ❤️ Heartbeat Interval : {} sec", featureData.heartbeatInterval());
-            logger.info("   📶 Cell Scan Count    : {}", featureData.cellScanCount());
-            logger.info("   📨 Backup Mode        : {}", featureData.backupMode());
+            // ✅ Validate numeric
+            if (!imei.toString().matches("\\d{15}")) {
+                logger.warn("IMEI contains non-digit characters: {}", imei);
+                return null;
+            }
 
-            // // 🗺️ MAP LINKS -------------------->
-            // logger.info("🗺️ Map Links -------------------->");
-            // logger.info(String.format(" 🔗 Google Maps :
-            // https://www.google.com/maps/search/?api=1&query=%.6f,%.6f",
-            // location.latitude(), location.longitude()));
-            // logger.info(String.format(
-            // " 🔗 OpenStreetMap :
-            // https://www.openstreetmap.org/?mlat=%.6f&mlon=%.6f#map=16/%.6f/%.6f",
-            // location.latitude(), location.longitude(), location.latitude(),
-            // location.longitude()));
-
-            logger.info("📡 Device Report Log <=========================================== END");
+            logger.info("Extracted IMEI: {}", imei);
+            return imei.toString();
 
         } catch (Exception e) {
-            logger.error("💥 Enhanced GT06 parsing error for IMEI {}: {}", imei, e.getMessage(), e);
+            logger.error("Exception during IMEI extraction", e);
+            return null;
         }
     }
 
-    /**
-     * Map GT06 protocol number → human-readable name.
-     * Covers Login, Location, Status, Alarm, LBS, Command, Heartbeat, etc.
-     */
-    private String protocolName(int proto) {
-        return switch (proto) {
-            case 0x01 -> "Login";
-            case 0x05 -> "Heartbeat";
-            case 0x08 -> "GPS Location (old type)";
-            case 0x10 -> "LBS Location";
-            case 0x12 -> "GPS Location (0x12 type)";
-            case 0x13 -> "Status Info";
-            case 0x15 -> "String Information";
-            case 0x16 -> "Alarm Packet";
-            case 0x1A -> "Extended Status Info";
-            case 0x80 -> "Command Response (0x80)";
-            case 0x8A -> "Command Response (0x8A)";
-            case 0x94 -> "GPS Location (0x94 type)";
-            case 0x97 -> "OBD / Extended Data (some models)";
-            default -> String.format("Unknown (0x%02X)", proto);
-        };
-    }
+    private boolean authenticateDevice(Channel channel, String imeiStr) {
+        try {
+            IMEI imei = IMEI.of(imeiStr);
 
-    // @Override
-    // public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
-    //     if (evt instanceof IdleStateEvent event) {
-    //         if (event.state() == IdleState.ALL_IDLE) {
-    //             logger.warn("⏱️ Connection idle timeout: {}", ctx.channel().remoteAddress());
-    //             ctx.close();
-    //         }
-    //     }
-    // }
+            // Retrieve or create session
+            DeviceSession session = sessionService.getSession(imei)
+                    .orElseGet(() -> DeviceSession.create(
+                            imei,
+                            channel.id().asShortText(),
+                            channel.remoteAddress() != null ? channel.remoteAddress().toString() : "unknown"));
+
+            // Update channel and remote address
+            session.setChannel(
+                    channel.id().asShortText(),
+                    channel.remoteAddress() != null ? channel.remoteAddress().toString() : "unknown");
+
+            // Authenticate and persist
+            session.authenticate();
+            sessionService.saveSession(session);
+
+            // Attach to channel for lookup
+            channel.attr(SESSION_KEY).set(session);
+
+            return true;
+
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid IMEI format: {}", imeiStr);
+            return false;
+        } catch (Exception e) {
+            logger.error("Error authenticating IMEI {}: {}", imeiStr, e.getMessage(), e);
+            return false;
+        }
+    }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
@@ -812,50 +662,155 @@ public class Gt06ProtocolDecoder extends ChannelInboundHandlerAdapter {
         }
     }
 
-    /**
-     * Utility to compute CRC-ITU (CRC-16/X.25) over a byte array.
-     * Polynom: 0x1021, Init: 0xFFFF, RefIn/RefOut: false, XorOut: 0x0000
-     */
-    private short computeCrc(ByteBuf buf, int fromIndex, int length) {
-        int crc = 0xFFFF;
-        for (int i = fromIndex; i < fromIndex + length; i++) {
-            crc ^= (buf.getUnsignedByte(i) & 0xFF) << 8;
-            for (int j = 0; j < 8; j++) {
-                crc = (crc & 0x8000) != 0
-                        ? (crc << 1) ^ 0x1021
-                        : (crc << 1);
-            }
+    private String getBatteryLevelText(int batteryPercent) {
+        if (batteryPercent >= 90) {
+            return "Full";
+        } else if (batteryPercent >= 75) {
+            return "High";
+        } else if (batteryPercent >= 50) {
+            return "Medium";
+        } else if (batteryPercent >= 25) {
+            return "Low";
+        } else {
+            return "Critical";
         }
-        return (short) (crc & 0xFFFF);
+    }
+
+    private String getVoltageLevelText(int batteryVoltage) {
+        if (batteryVoltage >= 4100) {
+            return "High";
+        } else if (batteryVoltage >= 3900) {
+            return "Normal";
+        } else if (batteryVoltage >= 3700) {
+            return "Low";
+        } else {
+            return "Critical";
+        }
+    }
+
+    // /**
+    // * Send an ACK packet back to the terminal.
+    // *
+    // * @param ctx the channel context
+    // * @param frame the original message frame
+    // * @param type the protocol number to ACK (e.g., MSGGPSLBS1, MSGSTATUS)
+    // */
+    // private void sendAck(ChannelHandlerContext ctx, MessageFrame frame, int type)
+    // {
+    // // Construct ACK: 0x78 0x78 | length=0x05 | protocol | serial(2) | CRC(2) |
+    // 0x0D
+    // // 0x0A
+
+    // logger.info("➡️ Sending ACK for protocol 0x{:02X} to {}", type,
+    // ctx.channel().remoteAddress());
+    // ByteBuf ack = Unpooled.buffer(10);
+    // ack.writeByte(0x78);
+    // ack.writeByte(0x78);
+    // ack.writeByte(0x05);
+    // ack.writeByte(type);
+    // // Serial number high & low byte
+    // ack.writeByte((frame.serialNumber() >> 8) & 0xFF);
+    // ack.writeByte(frame.serialNumber() & 0xFF);
+    // // Compute CRC over length, protocol, serial
+    // short crc = computeCrc(ack, /* fromIndex= */2, /* length= */1 + 1 + 2);
+    // ack.writeByte((crc >> 8) & 0xFF);
+    // ack.writeByte(crc & 0xFF);
+    // ack.writeByte(0x0D);
+    // ack.writeByte(0x0A);
+    // ctx.writeAndFlush(ack);
+    // }
+
+    // /**
+    // * Utility to compute CRC-ITU (CRC-16/X.25) over a byte array.
+    // * Polynom: 0x1021, Init: 0xFFFF, RefIn/RefOut: false, XorOut: 0x0000
+    // */
+    // private short computeCrc(ByteBuf buf, int fromIndex, int length) {
+    // int crc = 0xFFFF;
+    // for (int i = fromIndex; i < fromIndex + length; i++) {
+    // crc ^= (buf.getUnsignedByte(i) & 0xFF) << 8;
+    // for (int j = 0; j < 8; j++) {
+    // crc = (crc & 0x8000) != 0
+    // ? (crc << 1) ^ 0x1021
+    // : (crc << 1);
+    // }
+    // }
+    // return (short) (crc & 0xFFFF);
+    // }
+
+    private void sendAck(ChannelHandlerContext ctx, MessageFrame frame, int protocol) {
+        // Validate inputs
+        if (frame == null) {
+            logger.warn("Cannot send ACK — frame is null (remote: {})", ctx.channel().remoteAddress());
+            return;
+        }
+        int serial = frame.serialNumber();
+        if ((serial & ~0xFFFF) != 0) {
+            logger.warn("Serial number out of range (must fit in 16 bits): {} (remote: {})", serial,
+                    ctx.channel().remoteAddress());
+            return;
+        }
+
+        // Typical ACK layout for GT06:
+        // start(2) | length(1) | protocol(1) | serial(2) | crc(2) | end(2)
+        // length usually = 0x05 for ACKs that contain protocol + serial + crc (1 + 2 +
+        // 2)
+        final int lengthField = 0x05;
+
+        logger.info("➡️ Sending ACK for protocol {} to {}", String.format("0x%02X", protocol & 0xFF),
+                ctx.channel().remoteAddress());
+
+        ByteBuf ack = Unpooled.buffer(10); // exact size: 2 + 1 + 1 + 2 + 2 + 2 = 10
+        // Start bytes
+        ack.writeByte(0x78);
+        ack.writeByte(0x78);
+
+        // Length and protocol
+        ack.writeByte(lengthField & 0xFF);
+        ack.writeByte(protocol & 0xFF);
+
+        // Serial (big-endian: high then low) — writeShort writes two bytes BE by
+        // default
+        ack.writeShort(serial & 0xFFFF);
+
+        // Compute CRC over: [length][protocol][serialHigh][serialLow]
+        final int crcStartIndex = 2; // index of length byte (0-based)
+        final int crcLength = ack.writerIndex() - crcStartIndex; // number of bytes between length and serial inclusive
+        int crc = computeCrc16Ccitt(ack, crcStartIndex, crcLength) & 0xFFFF;
+
+        // Write CRC (two bytes)
+        ack.writeShort(crc);
+
+        // End bytes
+        ack.writeByte(0x0D);
+        ack.writeByte(0x0A);
+
+        // Optionally log the ACK hex for debugging
+        logger.debug("ACK -> {}", ByteBufUtil.hexDump(ack));
+
+        ctx.writeAndFlush(ack);
     }
 
     /**
-     * Send an ACK packet back to the terminal.
+     * Compute CRC-16/CCITT (poly 0x1021, init 0xFFFF) over the given ByteBuf slice.
+     * This routine computes CRC over bytes [fromIndex .. fromIndex+length-1].
      *
-     * @param ctx   the channel context
-     * @param frame the original message frame
-     * @param type  the protocol number to ACK (e.g., MSGGPSLBS1, MSGSTATUS)
+     * Many GT06 implementations expect CRC computed over the length byte up to
+     * serial bytes inclusive.
      */
-    private void sendAck(ChannelHandlerContext ctx, MessageFrame frame, int type) {
-        // Construct ACK: 0x78 0x78 | length=0x05 | protocol | serial(2) | CRC(2) | 0x0D
-        // 0x0A
-
-        logger.info("➡️ Sending ACK for protocol 0x{:02X} to {}", type, ctx.channel().remoteAddress());
-        ByteBuf ack = Unpooled.buffer(10);
-        ack.writeByte(0x78);
-        ack.writeByte(0x78);
-        ack.writeByte(0x05);
-        ack.writeByte(type);
-        // Serial number high & low byte
-        ack.writeByte((frame.serialNumber() >> 8) & 0xFF);
-        ack.writeByte(frame.serialNumber() & 0xFF);
-        // Compute CRC over length, protocol, serial
-        short crc = computeCrc(ack, /* fromIndex= */2, /* length= */1 + 1 + 2);
-        ack.writeByte((crc >> 8) & 0xFF);
-        ack.writeByte(crc & 0xFF);
-        ack.writeByte(0x0D);
-        ack.writeByte(0x0A);
-        ctx.writeAndFlush(ack);
+    private int computeCrc16Ccitt(ByteBuf buf, int fromIndex, int length) {
+        int crc = 0xFFFF;
+        final int end = fromIndex + length;
+        for (int i = fromIndex; i < end; i++) {
+            crc ^= (buf.getUnsignedByte(i) & 0xFF) << 8;
+            for (int bit = 0; bit < 8; bit++) {
+                if ((crc & 0x8000) != 0) {
+                    crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+                } else {
+                    crc = (crc << 1) & 0xFFFF;
+                }
+            }
+        }
+        return crc & 0xFFFF;
     }
 
 }

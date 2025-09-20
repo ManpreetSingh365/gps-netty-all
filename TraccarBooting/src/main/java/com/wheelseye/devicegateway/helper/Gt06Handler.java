@@ -8,12 +8,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.wheelseye.devicegateway.config.KafkaConfig.KafkaAdapter;
+import com.wheelseye.devicegateway.dto.DeviceStatusDto;
 import com.wheelseye.devicegateway.dto.LocationDto;
 import com.wheelseye.devicegateway.mappers.LocationMapper;
 import com.wheelseye.devicegateway.model.DeviceSession;
+import com.wheelseye.devicegateway.model.DeviceSession.DeviceStatus;
 import com.wheelseye.devicegateway.protocol.Gt06ProtocolDecoder;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
-
 import io.netty.channel.ChannelHandlerContext;
 
 @Component
@@ -33,7 +34,8 @@ public class Gt06Handler {
             double longitude, double speed, double course, double accuracy, int satellites) {
 
         String remoteAddress = ctx.channel().remoteAddress().toString();
-        Optional<DeviceSession> sessionOpt = sessionService.getAuthenticatedSession(ctx);
+        Optional<DeviceSession> sessionOpt = sessionService.getSession(ctx.channel());
+
         if (sessionOpt.isEmpty()) {
             logger.warn("❌ No authenticated session for location from {}", remoteAddress);
             return;
@@ -84,13 +86,31 @@ public class Gt06Handler {
 
                 byte[] payload = LocationMapper.toProto(location).toByteArray();
                 kafkaAdapter.sendMessage("location.device", sid, payload);
-
-                logger.info("📍 Location for IMEI {}: lat={}, lon={}, speed={} @ {}",
-                        imei, latitude, longitude, speed, timestamp);
             }
         } catch (Exception e) {
             logger.error("💥 Error publishing location for IMEI {}: {}", imei, e.getMessage(), e);
         }
+    }
+
+    public void publishStatus(ChannelHandlerContext ctx, DeviceStatusDto deviceStatus) {
+
+        // 🔋 DEVICE STATUS -------------------->
+        logger.info("🔋 Device Status -------------------->");
+        logger.info("   🗃️ Packet      : 0x{}", Integer.toHexString(deviceStatus.statusBits()));
+        logger.info("   🔑 Ignition    : {} (ACC={})   🔦 ACC Line : {}", deviceStatus.ignition() ? "ON" : "OFF",
+                deviceStatus.ignition() ? "Active" : "Inactive");
+        logger.info("   🔌 Battery     : {} mV ({} V, {}%)   🔋 Ext Power : {}", deviceStatus.batteryVoltage(),
+                String.format("%.1f", deviceStatus.batteryVoltage() / 1000.0), deviceStatus.batteryPercent(),
+                deviceStatus.externalPower() ? "Connected" : "Disconnected");
+        logger.info("   ⚡ Charging    : {} {}", deviceStatus.charging() ? "✅" : "❌",
+                deviceStatus.charging() ? "Yes" : "No");
+        logger.info("   📡 GSM Signal  : {} dBm   📶 Level : {}", deviceStatus.gsmSignal(),
+                deviceStatus.signalLevel());
+        logger.info("   🛰️ GPS Fixed   : {}   🧭 Direction : {}°   🛰️ Satellites : {}",
+                deviceStatus.gpsFixed() ? "Yes" : "No", deviceStatus.direction(), deviceStatus.satellites());
+        logger.info("   🔋 Battery Lvl : {}   🔌 Voltage Lvl : {}", deviceStatus.batteryLevelText(),
+                deviceStatus.voltageLevelText());
+
     }
 
 }
