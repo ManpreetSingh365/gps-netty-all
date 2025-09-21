@@ -6,6 +6,10 @@ spring:
   application:
     name: device-gateway-service
 
+  # Allow circular references as a temporary fix until we can refactor
+  main:
+    allow-circular-references: true
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
     consumer:
@@ -22,16 +26,22 @@ spring:
     listener:
       ack-mode: MANUAL_IMMEDIATE
 
-  redis:
-    host: ${REDIS_HOST:redis}
-    port: ${REDIS_PORT:6379}
-    password: ${REDIS_PASSWORD:}
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      # database: ${REDIS_DATABASE:0}
+      # timeout: 2s
 
 device-gateway:
   tcp:
     port: ${TCP_PORT:5023}
-    boss-threads: 1
-    worker-threads: 4
+    boss-threads: ${TCP_BOSS_THREADS:1}
+    worker-threads: ${TCP_WORKER_THREADS:0}
+    business-threads: ${TCP_BUSINESS_THREADS:4}
+    idle-timeout: ${TCP_IDLE_TIMEOUT:300}
+    protocol: ${DEFAULT_PROTOCOL:GT06}
 
   kafka:
     topics:
@@ -43,12 +53,16 @@ device-gateway:
   session:
     idle-timeout: ${DEVICE_GATEWAY_SESSION_IDLE_TIMEOUT:600}
     cleanup-interval: ${DEVICE_GATEWAY_SESSION_CLEANUP_INTERVAL:60}
+    idle-timeout-seconds: ${SESSION_IDLE_TIMEOUT_SECONDS:600}
+    max-sessions: ${MAX_SESSIONS:10000}
+
 
 logging:
   level:
-    com.wheelseye.devicegateway: INFO
-    io.netty: WARN
+    com.wheelseye.devicegateway: ${LOG_LEVEL:INFO}
     org.springframework.kafka: INFO
+    org.springframework.data.redis: WARN
+    io.netty: ${NETTY_LOG_LEVEL:WARN}
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
 

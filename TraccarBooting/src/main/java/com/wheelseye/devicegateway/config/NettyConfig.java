@@ -1,6 +1,7 @@
 package com.wheelseye.devicegateway.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.DefaultValue;
 
 //* Immutable Netty TCP Server configuration.
 // port – TCP port where the Netty server listens for incoming connections. (default: 5023)
@@ -12,21 +13,38 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 // idleTimeoutSeconds – Duration in seconds after which inactive connections are automatically closed. (default: 600)
 @ConfigurationProperties(prefix = "device-gateway.tcp")
 public record NettyConfig(
-        int port,
-        int bossThreads,
-        int workerThreads,
-        int backlog,
-        boolean keepAlive,
-        boolean tcpNoDelay,
-        int idleTimeoutSeconds
+    @DefaultValue("5023") int port,
+    @DefaultValue("1") int bossThreads,
+    @DefaultValue("0") int workerThreads,
+    @DefaultValue("1024") int backlog,
+    @DefaultValue("true") boolean keepAlive,
+    @DefaultValue("true") boolean tcpNoDelay,
+    @DefaultValue("600") int idleTimeoutSeconds
 ) {
+    
+    // Compact constructor with validation
     public NettyConfig {
-        if (port == 0) port = 5023;
-        if (bossThreads == 0) bossThreads = 1;
-        if (workerThreads == 0) workerThreads = 4;
-        if (backlog == 0) backlog = 128;
-        if (keepAlive) keepAlive = true;
-        if (tcpNoDelay) tcpNoDelay = true;
-        if (idleTimeoutSeconds == 0) idleTimeoutSeconds = 600;
+        if (port <= 0 || port > 65535) {
+            throw new IllegalArgumentException("Port must be between 1 and 65535");
+        }
+        if (bossThreads < 1) {
+            throw new IllegalArgumentException("Boss threads must be at least 1");
+        }
+        if (workerThreads < 0) {
+            throw new IllegalArgumentException("Worker threads cannot be negative");
+        }
+        if (backlog < 1) {
+            throw new IllegalArgumentException("Backlog must be at least 1");
+        }
+        if (idleTimeoutSeconds < 1) {
+            throw new IllegalArgumentException("Idle timeout must be at least 1 second");
+        }
+    }
+    
+    /**
+     * Get effective worker threads (0 means use available processors)
+     */
+    public int getEffectiveWorkerThreads() {
+        return workerThreads == 0 ? Runtime.getRuntime().availableProcessors() : workerThreads;
     }
 }
