@@ -425,12 +425,12 @@ public class RedisSessionRepository {
             
             -- Add to active sessions set
             redis.call("SADD", activeSet, sessionId)
-            redis.call("EXPIRE", activeSet, indexTtl)
+            redis.call("EXPIRE", activeSet, indexTtl)`
             
             -- Update metrics
-            redis.call("HINCRBY", metricsKey, "total:sessions", 1)
+            redis.call("HINCRBY", metricsKey, "total:sessions", "1")
             if isAuthenticated == "1" then  -- ✅ FIXED: String comparison
-                redis.call("HINCRBY", metricsKey, "authenticated:sessions", 1)
+                redis.call("HINCRBY", metricsKey, "authenticated:sessions", "1")
             end
             
             return 1
@@ -468,9 +468,9 @@ public class RedisSessionRepository {
             redis.call("SREM", activeSet, sessionId)
             
             -- Update metrics  
-            redis.call("HINCRBY", metricsKey, "total:sessions", -1)
+            redis.call("HINCRBY", metricsKey, "total:sessions", "-1")
             if wasAuthenticated == "1" then  -- ✅ FIXED: String comparison
-                redis.call("HINCRBY", metricsKey, "authenticated:sessions", -1)
+                redis.call("HINCRBY", metricsKey, "authenticated:sessions", "-1")
             end
             
             return 1
