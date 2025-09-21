@@ -5,8 +5,10 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToMessageDecoder;
+import io.netty.util.AttributeKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -16,110 +18,75 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * GT06 Protocol Decoder - FINAL CORRECT IMPLEMENTATION
+ * Production-ready GT06 Protocol Decoder following modern Java 21 and Spring Boot 3.5.5 practices.
  * 
- * Based on official GT06 specification section 5.1.1.4:
- * "The terminal ID applies IMEI number of 15 bits. Example: if the IMEI is 123456789012345, 
- * the terminal ID is 0x01 0x23 0x45 0x67 0x89 0x01 0x23 0x45."
- * 
- * Fixed the BCD decoding to exactly match the specification format.
+ * Key improvements:
+ * - Proper IMEI extraction and session association
+ * - Comprehensive error handling and logging
+ * - Modern Java patterns and clean code principles
+ * - Performance optimizations with channel context caching
  */
+@Component
 @ChannelHandler.Sharable
 public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
 
-    private static final Logger logger = LoggerFactory.getLogger(Gt06ProtocolDecoder.class);
+    private static final Logger log = LoggerFactory.getLogger(Gt06ProtocolDecoder.class);
+
+    // Channel attribute keys for caching
+    private static final AttributeKey<String> IMEI_ATTR = AttributeKey.valueOf("DEVICE_IMEI");
+    private static final AttributeKey<Instant> LAST_SEEN_ATTR = AttributeKey.valueOf("LAST_SEEN");
 
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf frame, List<Object> out) throws Exception {
         try {
-            final DeviceMessage message = parseGT06Frame(frame, ctx);
+            var message = parseGT06Frame(frame, ctx);
             if (message != null) {
-                logger.debug("Decoded GT06 message: type={}, imei={} from {}",
-                    message.getType(), message.getImei(), ctx.channel().remoteAddress());
+                // Update last seen timestamp
+                ctx.channel().attr(LAST_SEEN_ATTR).set(Instant.now());
+                
+                log.debug("✅ Decoded GT06 message: type={}, imei={} from {}", 
+                        message.getType(), message.getImei(), ctx.channel().remoteAddress());
                 out.add(message);
             }
         } catch (Exception e) {
-            logger.error("Failed to decode GT06 frame from {}: {}", 
-                ctx.channel().remoteAddress(), e.getMessage(), e);
+            log.error("❌ Failed to decode GT06 frame from {}: {}", 
+                    ctx.channel().remoteAddress(), e.getMessage(), e);
+            // Don't propagate - allow connection to continue
         }
     }
 
     private DeviceMessage parseGT06Frame(ByteBuf frame, ChannelHandlerContext ctx) {
         if (frame.readableBytes() < 10) {
+            log.debug("📦 Insufficient frame data: {} bytes", frame.readableBytes());
             return null;
         }
 
-        final int originalIndex = frame.readerIndex();
+        var originalIndex = frame.readerIndex();
         
         try {
-            // Skip start bits (already validated by frame decoder)
+            // Skip start bits (0x78 0x78)
             frame.skipBytes(2);
             
-            // Read packet length
-            final int packetLength = frame.readUnsignedByte();
+            // Read packet length and protocol number
+            var packetLength = frame.readUnsignedByte();
+            var protocolNumber = frame.readUnsignedByte();
             
-            // Read protocol number
-            final int protocolNumber = frame.readUnsignedByte();
+            var data = new HashMap<String, Object>();
+            var timestamp = Instant.now();
             
-            String imei = null;
-            String type = "unknown";
-            Instant timestamp = Instant.now();
-            Map<String, Object> data = new HashMap<>();
-
-            // Parse based on protocol number
-            switch (protocolNumber) {
-                case 0x01 -> {
-                    // Login message - extract IMEI from 8-byte BCD Terminal ID
-                    type = "login";
-                    imei = parseLoginMessage(frame, data);
-                }
-                case 0x12, 0x22 -> {
-                    // GPS location data  
-                    type = "gps";
-                    imei = "GPS_DEVICE";
-                    parseLocationData(frame, data, timestamp);
-                }
-                case 0x13 -> {
-                    // Status/Heartbeat
-                    type = "heartbeat"; 
-                    imei = "STATUS_DEVICE";
-                    parseStatusData(frame, data);
-                }
-                case 0x15, 0x21 -> {
-                    // String information
-                    type = "string";
-                    imei = "STRING_DEVICE";
-                    parseStringInfo(frame, data);
-                }
-                case 0x16, 0x26 -> {
-                    // Alarm data (location + status)
-                    type = "alarm";
-                    imei = "ALARM_DEVICE";
-                    parseAlarmData(frame, data, timestamp);
-                }
-                case 0x1A, 0x2A -> {
-                    // GPS address query
-                    type = "gps_address";
-                    imei = "ADDRESS_DEVICE";
-                    parseGpsAddressRequest(frame, data);
-                }
-                default -> {
-                    type = "unknown";
-                    imei = "UNKNOWN_DEVICE";
-                    data.put("protocolNumber", String.format("0x%02X", protocolNumber));
-                }
-            }
-
-            // Use extracted IMEI if valid, otherwise use placeholder
-            if (imei == null || imei.isEmpty() || imei.startsWith("DEVICE_") || imei.startsWith("UNKNOWN")) {
-                imei = "DEVICE_" + String.format("%02X", protocolNumber);
-            }
-
-            return new DeviceMessage(imei, "GT06", type, timestamp, data);
+            return switch (protocolNumber) {
+                case 0x01 -> parseLoginMessage(frame, data, ctx);
+                case 0x12, 0x22 -> parseLocationMessage(frame, data, ctx, "gps");
+                case 0x16, 0x26 -> parseLocationMessage(frame, data, ctx, "alarm");  
+                case 0x13 -> parseHeartbeatMessage(frame, data, ctx);
+                case 0x15, 0x21 -> parseStringMessage(frame, data, ctx);
+                case 0x1A, 0x2A -> parseAddressRequestMessage(frame, data, ctx);
+                default -> parseUnknownMessage(protocolNumber, data, ctx);
+            };
 
         } catch (Exception e) {
-            logger.error("Error parsing GT06 frame from {}: {}", 
-                ctx.channel().remoteAddress(), e.getMessage(), e);
+            log.error("❌ Error parsing GT06 frame from {}: {}", 
+                    ctx.channel().remoteAddress(), e.getMessage(), e);
             return null;
         } finally {
             frame.readerIndex(originalIndex);
@@ -127,280 +94,336 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
     }
 
     /**
-     * Parse login message and extract IMEI from BCD format Terminal ID
-     * 
-     * Based on GT06 specification section 5.1.1.4
+     * Parse login message and establish device session context.
      */
-    private String parseLoginMessage(ByteBuf content, Map<String, Object> data) {
+    private DeviceMessage parseLoginMessage(ByteBuf content, Map<String, Object> data, 
+                                          ChannelHandlerContext ctx) {
         try {
             if (content.readableBytes() < 8) {
-                logger.warn("Insufficient data for login message: {} bytes", content.readableBytes());
+                log.warn("⚠️ Insufficient login data: {} bytes", content.readableBytes());
                 return null;
             }
 
             // Read 8-byte Terminal ID (IMEI in BCD format)
-            final byte[] terminalIdBytes = new byte[8];
+            var terminalIdBytes = new byte[8];
             content.readBytes(terminalIdBytes);
             
-            // Extract IMEI using corrected BCD decoding based on GT06 specification
-            final String imei = extractIMEI(terminalIdBytes);
-            
-            if (imei != null) {
-                data.put("loginImei", imei);
-                data.put("terminalId", bytesToHex(terminalIdBytes));
-                
-                logger.info("📱 Successfully extracted IMEI from login: {}", imei);
-                return imei;
-            } else {
-                logger.warn("Failed to extract IMEI from terminal ID: {}", bytesToHex(terminalIdBytes));
-            }
-            
-            // Read additional login data if available
-            if (content.readableBytes() >= 2) {
-                final int typeId = content.readUnsignedShort();
-                data.put("typeId", String.format("0x%04X", typeId));
-            }
-            
-            if (content.readableBytes() >= 2) {
-                final int timezoneInfo = content.readUnsignedShort();
-                data.put("timezoneInfo", String.format("0x%04X", timezoneInfo));
+            // Extract and validate IMEI
+            var imei = extractIMEI(terminalIdBytes);
+            if (imei == null || imei.length() != 15) {
+                log.error("❌ Invalid IMEI extracted from login: {}", imei);
+                return null;
             }
 
-            return imei;
+            // Cache IMEI in channel context for subsequent messages
+            ctx.channel().attr(IMEI_ATTR).set(imei);
             
+            // Parse additional login data
+            if (content.readableBytes() >= 2) {
+                var typeId = content.readUnsignedShort();
+                data.put("deviceType", String.format("0x%04X", typeId));
+            }
+            
+            if (content.readableBytes() >= 2) {
+                var timezoneInfo = content.readUnsignedShort();  
+                data.put("timezone", parseTimezone(timezoneInfo));
+            }
+
+            data.put("loginImei", imei);
+            data.put("terminalId", bytesToHex(terminalIdBytes));
+            data.put("loginTime", Instant.now());
+
+            log.info("🔐 Device login: IMEI={} from {}", imei, ctx.channel().remoteAddress());
+            
+            return new DeviceMessage(imei, "GT06", "login", Instant.now(), data);
+
         } catch (Exception e) {
-            logger.error("Error parsing login message: {}", e.getMessage(), e);
+            log.error("❌ Error parsing login message: {}", e.getMessage(), e);
             return null;
         }
     }
 
     /**
-     * Extract IMEI from 8-byte BCD format according to GT06 specification
-     * 
-     * From GT06 spec: "The terminal ID applies IMEI number of 15 bits. 
-     * Example: if the IMEI is 123456789012345, the terminal ID is 0x01 0x23 0x45 0x67 0x89 0x01 0x23 0x45."
-     * 
-     * This shows that BCD encoding packs 2 digits per byte with proper nibble order.
+     * Parse location messages with proper IMEI association.
+     */
+    private DeviceMessage parseLocationMessage(ByteBuf content, Map<String, Object> data,
+                                             ChannelHandlerContext ctx, String messageType) {
+        try {
+            var imei = getImeiFromContext(ctx);
+            if (imei == null) {
+                log.warn("⚠️ No IMEI in context for location message from {}", 
+                        ctx.channel().remoteAddress());
+                return null;
+            }
+
+            if (content.readableBytes() < 20) {
+                log.warn("⚠️ Insufficient location data: {} bytes", content.readableBytes());
+                return null;
+            }
+
+            // Parse GPS timestamp (6 bytes: YY MM DD HH MM SS)
+            var gpsTime = parseDateTime(content);
+            var timestamp = gpsTime.toInstant(ZoneOffset.UTC);
+            data.put("gpsTimestamp", timestamp);
+
+            // Parse GPS info and satellite count
+            var gpsInfo = content.readUnsignedByte();
+            var satelliteCount = gpsInfo & 0x0F;
+            var gpsPositioned = (gpsInfo & 0x10) != 0;
+            
+            // Parse coordinates (4 bytes each) 
+            var latitude = parseCoordinate(content.readInt());
+            var longitude = parseCoordinate(content.readInt());
+
+            // Parse speed and course
+            var speed = content.readUnsignedByte(); // km/h
+            var courseStatus = content.readUnsignedShort();
+            var course = courseStatus & 0x3FF; // 10 bits for course
+            var gpsFixed = (courseStatus & 0x1000) != 0;
+
+            // Populate location data
+            data.put("latitude", latitude);
+            data.put("longitude", longitude);
+            data.put("speed", speed);
+            data.put("course", course);
+            data.put("satelliteCount", satelliteCount);
+            data.put("gpsPositioned", gpsPositioned);
+            data.put("gpsFixed", gpsFixed);
+            data.put("altitude", 0.0); // GT06 doesn't provide altitude
+
+            // Parse additional status data if available (for alarm messages)
+            if ("alarm".equals(messageType) && content.readableBytes() >= 5) {
+                parseStatusInfo(content, data);
+            }
+
+            log.info("📍 Location data: {} -> [{:.6f}, {:.6f}] speed={}km/h satellites={}", 
+                    imei, latitude, longitude, speed, satelliteCount);
+
+            return new DeviceMessage(imei, "GT06", messageType, timestamp, data);
+
+        } catch (Exception e) {
+            log.error("❌ Error parsing location message: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Parse heartbeat/status messages.
+     */
+    private DeviceMessage parseHeartbeatMessage(ByteBuf content, Map<String, Object> data,
+                                              ChannelHandlerContext ctx) {
+        try {
+            var imei = getImeiFromContext(ctx);
+            if (imei == null) {
+                log.warn("⚠️ No IMEI in context for heartbeat from {}", 
+                        ctx.channel().remoteAddress());
+                return null;
+            }
+
+            // Parse status information if available
+            if (content.readableBytes() >= 5) {
+                parseStatusInfo(content, data);
+            }
+
+            log.debug("💓 Heartbeat from device: {}", imei);
+            
+            return new DeviceMessage(imei, "GT06", "heartbeat", Instant.now(), data);
+
+        } catch (Exception e) {
+            log.error("❌ Error parsing heartbeat message: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Parse string information messages.
+     */
+    private DeviceMessage parseStringMessage(ByteBuf content, Map<String, Object> data,
+                                           ChannelHandlerContext ctx) {
+        try {
+            var imei = getImeiFromContext(ctx);
+            if (imei == null) {
+                return null;
+            }
+
+            if (content.readableBytes() > 0) {
+                var stringBytes = new byte[content.readableBytes()];
+                content.readBytes(stringBytes);
+                var stringContent = new String(stringBytes, java.nio.charset.StandardCharsets.UTF_8);
+                data.put("content", stringContent.trim());
+            }
+
+            return new DeviceMessage(imei, "GT06", "string", Instant.now(), data);
+
+        } catch (Exception e) {
+            log.error("❌ Error parsing string message: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Parse GPS address request messages.
+     */
+    private DeviceMessage parseAddressRequestMessage(ByteBuf content, Map<String, Object> data,
+                                                   ChannelHandlerContext ctx) {
+        try {
+            var imei = getImeiFromContext(ctx);
+            if (imei == null) {
+                return null;
+            }
+
+            // Parse location data first
+            parseLocationMessage(content, data, ctx, "gps_address");
+
+            // Parse phone number if available
+            if (content.readableBytes() >= 21) {
+                var phoneBytes = new byte[21];
+                content.readBytes(phoneBytes);
+                var phoneNumber = new String(phoneBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
+                data.put("phoneNumber", phoneNumber);
+            }
+
+            return new DeviceMessage(imei, "GT06", "gps_address", Instant.now(), data);
+
+        } catch (Exception e) {
+            log.error("❌ Error parsing address request: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Handle unknown protocol messages.
+     */
+    private DeviceMessage parseUnknownMessage(int protocolNumber, Map<String, Object> data,
+                                            ChannelHandlerContext ctx) {
+        var imei = getImeiFromContext(ctx);
+        if (imei == null) {
+            imei = "UNKNOWN_" + ctx.channel().id().asShortText();
+        }
+
+        data.put("protocolNumber", String.format("0x%02X", protocolNumber));
+        log.warn("❓ Unknown protocol message: 0x{:02X} from device {}", protocolNumber, imei);
+        
+        return new DeviceMessage(imei, "GT06", "unknown", Instant.now(), data);
+    }
+
+    // Helper methods
+
+    /**
+     * Get IMEI from channel context with fallback.
+     */
+    private String getImeiFromContext(ChannelHandlerContext ctx) {
+        return ctx.channel().attr(IMEI_ATTR).get();
+    }
+
+    /**
+     * Extract IMEI from 8-byte BCD format according to GT06 specification.
      */
     private String extractIMEI(byte[] imeiBytes) {
         try {
             if (imeiBytes == null || imeiBytes.length != 8) {
-                logger.warn("Invalid IMEI bytes: length={}", imeiBytes != null ? imeiBytes.length : 0);
                 return null;
             }
 
-            // Log the raw bytes for debugging
-            logger.debug("Raw IMEI bytes: {}", bytesToHex(imeiBytes));
-
-            final StringBuilder imei = new StringBuilder(15);
+            var imei = new StringBuilder(15);
             
-            // Process each byte to extract BCD digits according to GT06 specification
-            for (int i = 0; i < imeiBytes.length; i++) {
-                final int b = imeiBytes[i] & 0xFF; // Convert to unsigned
-                final int high = (b >>> 4) & 0x0F;  // High nibble (first digit)
-                final int low = b & 0x0F;           // Low nibble (second digit)
+            for (var b : imeiBytes) {
+                var unsignedByte = b & 0xFF;
+                var high = (unsignedByte >>> 4) & 0x0F;
+                var low = unsignedByte & 0x0F;
                 
-                logger.trace("Byte {}: 0x{:02X} -> high={}, low={}", i, b, high, low);
-                
-                // Add high nibble digit if valid (0x0F is padding in some formats)
+                // Add high nibble if valid
                 if (high <= 9) {
                     imei.append((char)('0' + high));
-                } else if (high == 0x0F) {
-                    // 0x0F is padding - skip it
-                    logger.trace("Skipping high nibble padding 0x0F at byte {}", i);
-                } else {
-                    logger.warn("Invalid high nibble {} at byte {}", high, i);
+                } else if (high != 0x0F) { // Skip padding
                     return null;
                 }
                 
-                // Add low nibble digit if valid (0x0F is padding in some formats)
+                // Add low nibble if valid  
                 if (low <= 9) {
                     imei.append((char)('0' + low));
-                } else if (low == 0x0F) {
-                    // 0x0F is padding - skip it
-                    logger.trace("Skipping low nibble padding 0x0F at byte {}", i);
-                } else {
-                    logger.warn("Invalid low nibble {} at byte {}", low, i);
+                } else if (low != 0x0F) { // Skip padding
                     return null;
                 }
             }
 
-            String result = imei.toString();
-            logger.debug("Decoded IMEI before validation: '{}' (length={})", result, result.length());
-
-            // Handle 16-digit case (remove leading zero) as per GT06 examples
+            var result = imei.toString();
+            
+            // Handle 16-digit case (remove leading zero)
             if (result.length() == 16 && result.charAt(0) == '0') {
                 result = result.substring(1);
-                logger.debug("Removed leading zero: '{}' (length={})", result, result.length());
             }
 
-            // Validate final IMEI - must be exactly 15 digits, all numeric
-            if (result.length() == 15) {
-                // Check each character is a digit
-                for (int i = 0; i < result.length(); i++) {
-                    char c = result.charAt(i);
-                    if (c < '0' || c > '9') {
-                        logger.error("Invalid character '{}' (code={}) at position {} in IMEI: '{}'", 
-                            c, (int)c, i, result);
-                        return null;
-                    }
-                }
-                
-                logger.info("✅ Successfully decoded and validated IMEI: {} from BCD: {}", 
-                    result, bytesToHex(imeiBytes));
+            // Validate final IMEI
+            if (result.length() == 15 && result.chars().allMatch(Character::isDigit)) {
                 return result;
-            } else {
-                logger.error("Invalid IMEI length after BCD decoding: {} (expected 15), IMEI: '{}', raw: {}", 
-                    result.length(), result, bytesToHex(imeiBytes));
-                return null;
             }
-            
+
+            return null;
+
         } catch (Exception e) {
-            logger.error("Exception during IMEI extraction from {}: {}", 
-                bytesToHex(imeiBytes), e.getMessage(), e);
+            log.error("❌ IMEI extraction failed: {}", e.getMessage(), e);
             return null;
         }
     }
 
     /**
-     * Parse GPS location data
+     * Parse date/time from GPS data.
      */
-    private void parseLocationData(ByteBuf content, Map<String, Object> data, Instant timestamp) {
-        try {
-            if (content.readableBytes() < 20) {
-                return;
-            }
-
-            // Parse date/time (6 bytes: YY MM DD HH MM SS)
-            final LocalDateTime dateTime = parseDateTime(content);
-            data.put("timestamp", dateTime.toInstant(ZoneOffset.UTC));
-            
-            // Parse GPS info and satellite count (1 byte)
-            final int gpsInfo = content.readUnsignedByte();
-            final int satelliteCount = gpsInfo & 0x0F;
-            data.put("satelliteCount", satelliteCount);
-            
-            // Parse coordinates (4 bytes each)
-            final double latitude = parseCoordinate(content.readInt());
-            final double longitude = parseCoordinate(content.readInt());
-            data.put("latitude", latitude);
-            data.put("longitude", longitude);
-            
-            // Parse speed and course
-            final int speed = content.readUnsignedByte();
-            final int courseStatus = content.readUnsignedShort();
-            data.put("speed", speed);
-            data.put("course", courseStatus & 0x3FF);
-            data.put("gpsPositioned", (courseStatus & 0x1000) != 0);
-            
-            logger.debug("GPS parsed: lat={}, lon={}, speed={} km/h", latitude, longitude, speed);
-            
-        } catch (Exception e) {
-            logger.error("Error parsing GPS data: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Parse status/heartbeat data
-     */
-    private void parseStatusData(ByteBuf content, Map<String, Object> data) {
-        try {
-            if (content.readableBytes() >= 5) {
-                final int terminalInfo = content.readUnsignedByte();
-                final int voltageLevel = content.readUnsignedByte(); 
-                final int gsmSignal = content.readUnsignedByte();
-                final int alarmLanguage = content.readUnsignedShort();
-                
-                data.put("terminalInfo", terminalInfo);
-                data.put("voltageLevel", voltageLevel);
-                data.put("gsmSignalStrength", gsmSignal);
-                data.put("charging", (terminalInfo & 0x04) != 0);
-                data.put("alarmStatus", (alarmLanguage >> 8) & 0xFF);
-                data.put("language", (alarmLanguage & 0xFF) == 1 ? "Chinese" : "English");
-                
-                logger.debug("Status parsed: voltage={}, gsm={}, charging={}", 
-                    voltageLevel, gsmSignal, (terminalInfo & 0x04) != 0);
-            }
-        } catch (Exception e) {
-            logger.error("Error parsing status data: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Parse alarm data (GPS + status information)
-     */
-    private void parseAlarmData(ByteBuf content, Map<String, Object> data, Instant timestamp) {
-        try {
-            // Parse GPS data first
-            parseLocationData(content, data, timestamp);
-            
-            // Then parse status information
-            parseStatusData(content, data);
-            
-            data.put("isAlarm", true);
-            logger.warn("Alarm data received");
-            
-        } catch (Exception e) {
-            logger.error("Error parsing alarm data: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Parse string information
-     */
-    private void parseStringInfo(ByteBuf content, Map<String, Object> data) {
-        try {
-            if (content.readableBytes() > 0) {
-                final byte[] stringBytes = new byte[content.readableBytes()];
-                content.readBytes(stringBytes);
-                final String stringContent = new String(stringBytes, java.nio.charset.StandardCharsets.UTF_8);
-                data.put("stringContent", stringContent.trim());
-            }
-        } catch (Exception e) {
-            logger.error("Error parsing string info: {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Parse GPS address request
-     */
-    private void parseGpsAddressRequest(ByteBuf content, Map<String, Object> data) {
-        try {
-            // Contains GPS data + phone number
-            parseLocationData(content, data, Instant.now());
-            
-            if (content.readableBytes() >= 21) {
-                final byte[] phoneBytes = new byte[21];
-                content.readBytes(phoneBytes);
-                final String phoneNumber = new String(phoneBytes, java.nio.charset.StandardCharsets.UTF_8).trim();
-                data.put("phoneNumber", phoneNumber);
-            }
-        } catch (Exception e) {
-            logger.error("Error parsing GPS address request: {}", e.getMessage());
-        }
-    }
-
-    // Helper methods
-    
     private LocalDateTime parseDateTime(ByteBuf content) {
-        final int year = 2000 + content.readUnsignedByte();
-        final int month = content.readUnsignedByte();
-        final int day = content.readUnsignedByte();
-        final int hour = content.readUnsignedByte();
-        final int minute = content.readUnsignedByte();
-        final int second = content.readUnsignedByte();
+        var year = 2000 + content.readUnsignedByte();
+        var month = content.readUnsignedByte();
+        var day = content.readUnsignedByte();
+        var hour = content.readUnsignedByte();
+        var minute = content.readUnsignedByte();
+        var second = content.readUnsignedByte();
         return LocalDateTime.of(year, month, day, hour, minute, second);
     }
 
+    /**
+     * Parse coordinate from GT06 format.
+     */
     private double parseCoordinate(int rawValue) {
         // GT06 coordinate conversion: GPS decimal minutes * 30000
         return rawValue / 1800000.0;
     }
 
+    /**
+     * Parse status information from device.
+     */
+    private void parseStatusInfo(ByteBuf content, Map<String, Object> data) {
+        if (content.readableBytes() >= 5) {
+            var terminalInfo = content.readUnsignedByte();
+            var voltageLevel = content.readUnsignedByte();
+            var gsmSignal = content.readUnsignedByte();
+            var alarmLanguage = content.readUnsignedShort();
+            
+            data.put("charging", (terminalInfo & 0x04) != 0);
+            data.put("ignition", (terminalInfo & 0x02) != 0);
+            data.put("voltageLevel", voltageLevel);
+            data.put("gsmSignalStrength", gsmSignal);
+            data.put("alarmStatus", (alarmLanguage >> 8) & 0xFF);
+            data.put("language", (alarmLanguage & 0xFF) == 1 ? "Chinese" : "English");
+        }
+    }
+
+    /**
+     * Parse timezone information.
+     */
+    private String parseTimezone(int timezoneInfo) {
+        // Simple timezone parsing - can be enhanced based on specific requirements
+        var offsetHours = (timezoneInfo >> 8) & 0xFF;
+        var offsetMinutes = timezoneInfo & 0xFF;
+        return String.format("GMT%+03d:%02d", offsetHours - 12, offsetMinutes);
+    }
+
+    /**
+     * Convert byte array to hex string.
+     */
     private String bytesToHex(byte[] bytes) {
         if (bytes == null) return "null";
-        final StringBuilder result = new StringBuilder();
-        for (byte b : bytes) {
+        var result = new StringBuilder();
+        for (var b : bytes) {
             result.append(String.format("%02X", b & 0xFF));
         }
         return result.toString();
@@ -408,8 +431,8 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        logger.error("GT06 protocol decoder error from {}: {}", 
-            ctx.channel().remoteAddress(), cause.getMessage(), cause);
+        log.error("❌ GT06 decoder error from {}: {}", 
+                ctx.channel().remoteAddress(), cause.getMessage(), cause);
         super.exceptionCaught(ctx, cause);
     }
 }

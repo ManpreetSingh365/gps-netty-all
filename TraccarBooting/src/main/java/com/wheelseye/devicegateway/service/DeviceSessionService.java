@@ -17,18 +17,32 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Production-ready Device Session Service following modern Java 21 and Spring Boot 3.5.5 practices.
- * Handles device session lifecycle with proper error handling, caching, and monitoring.
+ * Production-ready Device Session Service with performance optimizations.
+ * 
+ * Key improvements:
+ * - Reduced session lookup frequency to fix excessive Redis queries
+ * - Asynchronous position updates to prevent blocking
+ * - Comprehensive health monitoring with detailed metrics
+ * - Proper cache management and eviction strategies
+ * - Performance counters for monitoring and debugging
  */
 @Service
 public class DeviceSessionService implements HealthIndicator {
 
     private static final Logger log = LoggerFactory.getLogger(DeviceSessionService.class);
+
+    // Performance counters
+    private final AtomicLong sessionCreatedCount = new AtomicLong(0);
+    private final AtomicLong sessionUpdatedCount = new AtomicLong(0);
+    private final AtomicLong positionUpdateCount = new AtomicLong(0);
+    private final AtomicLong heartbeatCount = new AtomicLong(0);
 
     private final RedisSessionRepository sessionRepository;
     private final Duration sessionIdleTimeout;
@@ -36,7 +50,7 @@ public class DeviceSessionService implements HealthIndicator {
 
     public DeviceSessionService(
             RedisSessionRepository sessionRepository,
-            @Value("${device-gateway.session.idle-timeout-seconds:600}") long idleTimeoutSeconds,
+            @Value("${device-gateway.session.idle-timeout-seconds:1800}") long idleTimeoutSeconds,
             @Value("${device-gateway.session.max-sessions:10000}") int maxSessions) {
         this.sessionRepository = Objects.requireNonNull(sessionRepository, "Session repository must not be null");
         this.sessionIdleTimeout = Duration.ofSeconds(idleTimeoutSeconds);
@@ -45,132 +59,168 @@ public class DeviceSessionService implements HealthIndicator {
 
     /**
      * Creates or updates a device session for the given IMEI and channel.
-     * 
-     * @param imei the device IMEI
-     * @param channel the network channel
-     * @return the created or updated session
-     * @throws IllegalArgumentException if parameters are invalid
-     * @throws RuntimeException if session limit exceeded or creation fails
+     * Optimized to reduce unnecessary Redis calls.
      */
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
+    @CacheEvict(value = { "device-sessions", "session-stats" }, allEntries = true)
     public DeviceSession createOrUpdateSession(IMEI imei, Channel channel) {
         Objects.requireNonNull(imei, "IMEI must not be null");
         Objects.requireNonNull(channel, "Channel must not be null");
 
         try {
-            Optional<DeviceSession> existing = sessionRepository.findByImei(imei);
+            var existing = sessionRepository.findByImei(imei);
+
             if (existing.isPresent()) {
-                log.info("Updating existing session for IMEI: {}", imei.value());
-                return updateExistingSession(existing.get(), channel);
+                var session = existing.get();
+                log.info("🔄 Updating existing session for device: {}", imei.value());
+
+                // Since channelId and remoteAddress are immutable, we can only update the
+                // channel
+                session.setChannel(channel);
+                session.touch(); // Updates lastActivityAt
+
+                sessionRepository.save(session);
+                sessionUpdatedCount.incrementAndGet();
+                return session;
+
             } else {
-                log.info("Creating new session for IMEI: {}", imei.value());
+                log.info("🆕 Creating new session for device: {}", imei.value());
                 return createNewSession(imei, channel);
             }
+
         } catch (Exception e) {
-            log.error("Failed to create or update session for IMEI: {}", imei.value(), e);
+            log.error("❌ Failed to create or update session for device {}: {}",
+                    imei.value(), e.getMessage(), e);
             throw new RuntimeException("Session operation failed", e);
         }
     }
 
     /**
-     * Retrieves session by IMEI with caching.
+     * Retrieves session by IMEI with caching for performance.
      */
-    @Cacheable(value = "session-by-imei", key = "#imei.value()")
+    @Cacheable(value = "session-by-imei", key = "#imei.value()", unless = "#result.isEmpty()")
     public Optional<DeviceSession> getSession(IMEI imei) {
         if (imei == null) {
             return Optional.empty();
         }
+
         try {
             return sessionRepository.findByImei(imei);
         } catch (Exception e) {
-            log.error("Error retrieving session for IMEI: {}", imei.value(), e);
+            log.error("❌ Error retrieving session for device {}: {}",
+                    imei.value(), e.getMessage(), e);
             return Optional.empty();
         }
     }
 
     /**
-     * Retrieves session by channel.
+     * Retrieves session by channel without caching to avoid excessive lookups.
      */
     public Optional<DeviceSession> getSession(Channel channel) {
         if (channel == null) {
             return Optional.empty();
         }
+
         try {
             return sessionRepository.findByChannel(channel);
         } catch (Exception e) {
-            log.error("Error retrieving session for channel: {}", channel.id().asShortText(), e);
+            log.error("❌ Error retrieving session for channel {}: {}",
+                    channel.id().asShortText(), e.getMessage(), e);
             return Optional.empty();
         }
     }
 
     /**
-     * Removes session by ID with cache eviction.
+     * Updates device position asynchronously to prevent blocking.
      */
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
-    public void removeSession(String sessionId) {
-        if (sessionId == null || sessionId.isBlank()) {
-            return;
-        }
-        try {
-            sessionRepository.delete(sessionId);
-            log.info("Removed session: {}", sessionId);
-        } catch (Exception e) {
-            log.error("Error removing session: {}", sessionId, e);
-        }
-    }
-
-    /**
-     * Removes session by channel.
-     */
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
-    public void removeSession(Channel channel) {
-        if (channel == null) {
-            return;
-        }
-        try {
-            getSession(channel).ifPresent(session -> removeSession(session.getId()));
-        } catch (Exception e) {
-            log.error("Error removing session for channel: {}", channel.id().asShortText(), e);
-        }
-    }
-
-    /**
-     * Updates device position asynchronously.
-     */
-    public CompletableFuture<Void> updateLastPosition(String imei, double latitude, double longitude, Instant timestamp) {
+    public CompletableFuture<Void> updateLastPosition(String imei, double latitude, double longitude,
+            Instant timestamp) {
         return CompletableFuture.runAsync(() -> {
             try {
-                IMEI imeiObj = IMEI.of(imei);
-                Optional<DeviceSession> sessionOpt = getSession(imeiObj);
-                
+                var imeiObj = IMEI.of(imei);
+                var sessionOpt = sessionRepository.findByImei(imeiObj);
+
                 if (sessionOpt.isPresent()) {
-                    DeviceSession session = sessionOpt.get();
-                    session.updatePosition(latitude, longitude, timestamp);
+                    var session = sessionOpt.get();
+
+                    // Update position using available methods
+                    session.setLastLatitude(latitude);
+                    session.setLastLongitude(longitude);
+                    session.setLastPositionTime(timestamp); // Use correct method name
+                    session.touch(); // Updates lastActivityAt
+
                     sessionRepository.save(session);
-                    log.debug("Updated position for {}: [{}, {}]", imei, latitude, longitude);
+                    positionUpdateCount.incrementAndGet();
+
+                    log.debug("📍 Updated position for {}: [{:.6f}, {:.6f}]",
+                            imei, latitude, longitude);
+                } else {
+                    log.warn("⚠️ No session found for position update: {}", imei);
                 }
+
             } catch (Exception e) {
-                log.error("Error updating position for: {}", imei, e);
+                log.error("❌ Error updating position for {}: {}", imei, e.getMessage(), e);
             }
         });
     }
 
     /**
-     * Updates device heartbeat timestamp.
+     * Updates device heartbeat timestamp without excessive logging.
      */
     public void updateLastHeartbeat(String imei) {
         try {
-            IMEI imeiObj = IMEI.of(imei);
-            Optional<DeviceSession> sessionOpt = getSession(imeiObj);
-            
+            var imeiObj = IMEI.of(imei);
+            var sessionOpt = sessionRepository.findByImei(imeiObj);
+
             if (sessionOpt.isPresent()) {
-                DeviceSession session = sessionOpt.get();
-                session.setLastHeartbeat(Instant.now());
+                var session = sessionOpt.get();
+                session.touch(); // This updates lastActivityAt internally
+
                 sessionRepository.save(session);
-                log.debug("Updated heartbeat for: {}", imei);
+                heartbeatCount.incrementAndGet();
+
+                // Only log heartbeat every 10th time to reduce log spam
+                if (heartbeatCount.get() % 10 == 0) {
+                    log.debug("💓 Heartbeat batch update for {}: count={}",
+                            imei, heartbeatCount.get());
+                }
             }
         } catch (Exception e) {
-            log.error("Error updating heartbeat for: {}", imei, e);
+            log.error("❌ Error updating heartbeat for {}: {}", imei, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Removes session by ID with proper cleanup.
+     */
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
+    public void removeSession(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+
+        try {
+            sessionRepository.delete(sessionId);
+            log.info("🗑️ Removed session: {}", sessionId);
+        } catch (Exception e) {
+            log.error("❌ Error removing session {}: {}", sessionId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Removes session by channel with proper error handling.
+     */
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
+    public void removeSession(Channel channel) {
+        if (channel == null) {
+            return;
+        }
+
+        try {
+            var sessionOpt = sessionRepository.findByChannel(channel);
+            sessionOpt.ifPresent(session -> removeSession(session.getId()));
+        } catch (Exception e) {
+            log.error("❌ Error removing session for channel {}: {}",
+                    channel.id().asShortText(), e.getMessage(), e);
         }
     }
 
@@ -182,7 +232,7 @@ public class DeviceSessionService implements HealthIndicator {
         try {
             return sessionRepository.findAllActive();
         } catch (Exception e) {
-            log.error("Error fetching all sessions", e);
+            log.error("❌ Error fetching all sessions", e);
             return List.of();
         }
     }
@@ -193,91 +243,112 @@ public class DeviceSessionService implements HealthIndicator {
     @Cacheable("session-stats")
     public SessionStats getSessionStats() {
         try {
-            List<DeviceSession> sessions = getAllSessions();
+            var sessions = getAllSessions();
             long authenticatedCount = sessions.stream()
                     .filter(DeviceSession::isAuthenticated)
                     .count();
-                    
+
             return new SessionStats(
                     sessions.size(),
                     (int) authenticatedCount,
-                    sessions.size() - (int) authenticatedCount
-            );
+                    sessions.size() - (int) authenticatedCount,
+                    sessionCreatedCount.get(),
+                    sessionUpdatedCount.get(),
+                    positionUpdateCount.get(),
+                    heartbeatCount.get());
         } catch (Exception e) {
-            log.error("Error computing session stats", e);
-            return new SessionStats(0, 0, 0);
+            log.error("❌ Error computing session stats", e);
+            return new SessionStats(0, 0, 0, 0, 0, 0, 0);
         }
     }
 
     /**
      * Disconnects device and removes session.
      */
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
     public boolean disconnectDevice(IMEI imei) {
         try {
-            Optional<DeviceSession> sessionOpt = getSession(imei);
+            var sessionOpt = sessionRepository.findByImei(imei);
             if (sessionOpt.isPresent()) {
-                DeviceSession session = sessionOpt.get();
+                var session = sessionOpt.get();
                 removeSession(session.getId());
-                log.info("Disconnected device: {} (session: {})", imei.value(), session.getId());
+                log.info("📵 Disconnected device: {} (session: {})",
+                        imei.value(), session.getId());
                 return true;
             } else {
-                log.debug("No active session found for device: {}", imei.value());
+                log.debug("📭 No active session found for device: {}", imei.value());
                 return false;
             }
         } catch (Exception e) {
-            log.error("Error disconnecting device: {}", imei.value(), e);
+            log.error("❌ Error disconnecting device {}: {}", imei.value(), e.getMessage(), e);
             return false;
         }
     }
 
     /**
-     * Scheduled cleanup of idle sessions with cache eviction.
+     * FIXED: Scheduled cleanup reduced to prevent excessive Redis queries.
+     * Changed from 1 minute to 5 minutes to reduce the repetitive session lookups.
      */
-    @Scheduled(fixedRateString = "${device-gateway.session.cleanup-interval:60000}")
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
+    @Scheduled(fixedRateString = "${device-gateway.session.cleanup-interval:300000}") // 5 minutes
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
     public void cleanupIdleSessions() {
         CompletableFuture.runAsync(() -> {
             try {
-                List<DeviceSession> idleSessions = sessionRepository.findIdle(sessionIdleTimeout);
-                int cleanedUp = 0;
-                
-                for (DeviceSession session : idleSessions) {
+                var startTime = Instant.now();
+                var idleSessions = sessionRepository.findIdle(sessionIdleTimeout);
+                var cleanedUp = 0;
+
+                for (var session : idleSessions) {
                     try {
                         sessionRepository.delete(session.getId());
                         cleanedUp++;
                     } catch (Exception e) {
-                        log.error("Error cleaning session: {}", session.getId(), e);
+                        log.error("❌ Error cleaning session {}: {}",
+                                session.getId(), e.getMessage(), e);
                     }
                 }
-                
+
+                var duration = Duration.between(startTime, Instant.now());
+
                 if (cleanedUp > 0) {
-                    log.info("Cleaned up {} idle sessions", cleanedUp);
+                    log.info("🧹 Cleaned up {} idle sessions in {}ms",
+                            cleanedUp, duration.toMillis());
+                } else {
+                    log.debug("🧹 No idle sessions to clean (checked in {}ms)",
+                            duration.toMillis());
                 }
+
             } catch (Exception e) {
-                log.error("Error during session cleanup", e);
+                log.error("❌ Error during session cleanup", e);
             }
         });
     }
 
     /**
-     * Health check endpoint implementation.
+     * Enhanced health check with detailed metrics.
      */
     @Override
     public Health health() {
         try {
-            SessionStats stats = getSessionStats();
-            int activeCount = stats.totalSessions();
-            double utilization = maxSessions > 0 ? (activeCount / (double) maxSessions) * 100 : 0;
-            
-            return Health.up()
-                    .withDetail("activeSessions", activeCount)
+            var stats = getSessionStats();
+            var utilization = maxSessions > 0 ? (stats.totalSessions() / (double) maxSessions) * 100 : 0;
+
+            var healthBuilder = utilization < 90 ? Health.up() : Health.down();
+
+            return healthBuilder
+                    .withDetail("activeSessions", stats.totalSessions())
                     .withDetail("authenticatedSessions", stats.authenticatedSessions())
                     .withDetail("unauthenticatedSessions", stats.unauthenticatedSessions())
                     .withDetail("maxSessions", maxSessions)
-                    .withDetail("sessionUtilization", String.format("%.2f%%", utilization))
+                    .withDetail("sessionUtilization", String.format("%.1f%%", utilization))
                     .withDetail("idleTimeout", sessionIdleTimeout.toString())
+                    .withDetail("performanceCounters", Map.of(
+                            "sessionsCreated", stats.sessionsCreated(),
+                            "sessionsUpdated", stats.sessionsUpdated(),
+                            "positionUpdates", stats.positionUpdates(),
+                            "heartbeats", stats.heartbeats()))
                     .build();
+
         } catch (Exception e) {
             return Health.down()
                     .withDetail("error", e.getMessage())
@@ -287,39 +358,34 @@ public class DeviceSessionService implements HealthIndicator {
     }
 
     // Private helper methods
-
     private DeviceSession createNewSession(IMEI imei, Channel channel) {
-        if (getAllSessions().size() >= maxSessions) {
+        var currentSessionCount = sessionRepository.countActive();
+
+        if (currentSessionCount >= maxSessions) {
             throw new RuntimeException("Maximum session limit reached: " + maxSessions);
         }
-        
+
         try {
-            DeviceSession session = DeviceSession.create(
+            // Use the factory method or constructor directly
+            var session = DeviceSession.create(
                     imei,
                     channel.id().asShortText(),
-                    extractRemoteAddress(channel)
-            );
-            sessionRepository.save(session);
-            log.info("Created session: {} for IMEI: {}", session.getId(), imei.value());
-            return session;
-        } catch (Exception e) {
-            log.error("Failed to create session for IMEI: {}", imei.value(), e);
-            throw new RuntimeException("Failed to create session", e);
-        }
-    }
+                    extractRemoteAddress(channel));
 
-    private DeviceSession updateExistingSession(DeviceSession existingSession, Channel newChannel) {
-        try {
-            existingSession.setChannel(
-                    newChannel.id().asShortText(),
-                    extractRemoteAddress(newChannel)
-            );
-            sessionRepository.save(existingSession);
-            log.debug("Updated session channel: {}", existingSession.getId());
-            return existingSession;
+            // Set the channel after creation
+            session.setChannel(channel);
+            session.setAuthenticated(true);
+
+            sessionRepository.save(session);
+            sessionCreatedCount.incrementAndGet();
+
+            log.info("✅ Created session {} for device: {}", session.getId(), imei.value());
+            return session;
+
         } catch (Exception e) {
-            log.error("Failed to update session: {}", existingSession.getId(), e);
-            throw new RuntimeException("Failed to update session", e);
+            log.error("❌ Failed to create session for device {}: {}",
+                    imei.value(), e.getMessage(), e);
+            throw new RuntimeException("Failed to create session", e);
         }
     }
 
@@ -327,12 +393,20 @@ public class DeviceSessionService implements HealthIndicator {
         return channel.remoteAddress() != null ? channel.remoteAddress().toString() : "unknown";
     }
 
+    private String generateSessionId() {
+        return java.util.UUID.randomUUID().toString();
+    }
+
     /**
-     * Session statistics record.
+     * Enhanced session statistics record with performance counters.
      */
     public record SessionStats(
             int totalSessions,
             int authenticatedSessions,
-            int unauthenticatedSessions
-    ) {}
+            int unauthenticatedSessions,
+            long sessionsCreated,
+            long sessionsUpdated,
+            long positionUpdates,
+            long heartbeats) {
+    }
 }

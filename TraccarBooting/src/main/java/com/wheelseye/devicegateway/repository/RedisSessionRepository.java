@@ -9,25 +9,25 @@ import io.netty.channel.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * Modern Redis Session Repository using Spring Boot 3.5.5 and Java 21 best
- * practices.
+ * Production-ready Redis Session Repository with performance optimizations.
  * 
- * Features:
- * - No manual Lua scripts - uses Redis operations directly
- * - Proper Jackson serialization with type information
- * - Comprehensive error handling and logging
- * - Modern Java patterns (records, Optional, Stream API)
- * - Production-ready with proper cleanup and monitoring
+ * Key improvements:
+ * - Eliminated excessive debug logging that was causing performance issues
+ * - Direct Redis operations without Lua scripts for reliability
+ * - Efficient batch operations and proper indexing
+ * - Comprehensive error handling with graceful degradation
+ * - Modern Java 21 patterns with clean code principles
  */
 @Repository
 public class RedisSessionRepository {
@@ -56,7 +56,7 @@ public class RedisSessionRepository {
     }
 
     /**
-     * Save session using atomic Redis operations (no Lua scripts).
+     * Save session using optimized Redis operations.
      */
     public void save(DeviceSession session) {
         Objects.requireNonNull(session, "Session cannot be null");
@@ -65,29 +65,49 @@ public class RedisSessionRepository {
             var sessionData = SessionData.fromDeviceSession(session);
             var sessionKey = SESSION_PREFIX + session.getId();
 
-            // Save main session data with TTL
-            redis.opsForValue().set(sessionKey, sessionData, SESSION_TTL);
+            // Execute operations in pipeline for better performance
+            redis.executePipelined((RedisCallback<Object>) connection -> {
+                // Save main session data with TTL
+                redis.opsForValue().set(sessionKey, sessionData, SESSION_TTL);
 
-            // Create indices with TTL
-            createIndices(session);
+                // Create indices with TTL
+                if (session.getChannelId() != null) {
+                    var channelKey = CHANNEL_PREFIX + session.getChannelId();
+                    redis.opsForValue().set(channelKey, session.getId(), INDEX_TTL);
+                }
 
-            // Add to active sessions set
-            redis.opsForSet().add(ACTIVE_SESSIONS, session.getId());
-            redis.expire(ACTIVE_SESSIONS, INDEX_TTL);
+                if (session.getImei() != null) {
+                    var imeiKey = IMEI_PREFIX + session.getImei().value();
+                    redis.opsForValue().set(imeiKey, session.getId(), INDEX_TTL);
+                }
 
-            // Update metrics
-            updateMetrics(session, true);
+                // Add to active sessions set
+                redis.opsForSet().add(ACTIVE_SESSIONS, session.getId());
+                redis.expire(ACTIVE_SESSIONS, INDEX_TTL);
 
-            log.debug("✅ Session saved: {}", session.getId());
+                // Update metrics
+                redis.opsForHash().increment(METRICS_KEY, "total", 1);
+                if (session.isAuthenticated()) {
+                    redis.opsForHash().increment(METRICS_KEY, "authenticated", 1);
+                }
+                redis.expire(METRICS_KEY, Duration.ofDays(1));
+
+                return null;
+            });
+
+            // REMOVED excessive debug logging to fix performance issue
+            if (log.isTraceEnabled()) {
+                log.trace("Session saved: {}", session.getId());
+            }
 
         } catch (Exception e) {
-            log.error("❌ Failed to save session: {}", session.getId(), e);
+            log.error("Failed to save session: {}", session.getId(), e);
             throw new RuntimeException("Failed to save session", e);
         }
     }
 
     /**
-     * Find session by ID with robust error handling.
+     * Find session by ID with optimized error handling.
      */
     public Optional<DeviceSession> findById(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -99,7 +119,6 @@ public class RedisSessionRepository {
             var rawData = redis.opsForValue().get(sessionKey);
 
             if (rawData == null) {
-                log.debug("📭 Session not found: {}", sessionId);
                 return Optional.empty();
             }
 
@@ -109,11 +128,16 @@ public class RedisSessionRepository {
             }
 
             var session = sessionData.toDeviceSession();
-            log.debug("✅ Session found: {}", sessionId);
+
+            // REMOVED excessive debug logging to fix performance issue
+            if (log.isTraceEnabled()) {
+                log.trace("Session found: {}", sessionId);
+            }
+
             return Optional.of(session);
 
         } catch (Exception e) {
-            log.error("❌ Error finding session: {}", sessionId, e);
+            log.error("Error finding session: {}", sessionId, e);
             return Optional.empty();
         }
     }
@@ -132,14 +156,13 @@ public class RedisSessionRepository {
             var sessionIdObj = redis.opsForValue().get(channelKey);
 
             if (sessionIdObj == null) {
-                log.debug("📭 No session found for channel: {}", channelId);
                 return Optional.empty();
             }
 
             return findById(sessionIdObj.toString());
 
         } catch (Exception e) {
-            log.error("❌ Error finding session by channel: {}", channel.id().asShortText(), e);
+            log.error("Error finding session by channel: {}", channel.id().asShortText(), e);
             return Optional.empty();
         }
     }
@@ -157,20 +180,19 @@ public class RedisSessionRepository {
             var sessionIdObj = redis.opsForValue().get(imeiKey);
 
             if (sessionIdObj == null) {
-                log.debug("📭 No session found for IMEI: {}", imei.value());
                 return Optional.empty();
             }
 
             return findById(sessionIdObj.toString());
 
         } catch (Exception e) {
-            log.error("❌ Error finding session by IMEI: {}", imei.value(), e);
+            log.error("Error finding session by IMEI: {}", imei.value(), e);
             return Optional.empty();
         }
     }
 
     /**
-     * Delete session with complete cleanup.
+     * Delete session with comprehensive cleanup.
      */
     public void delete(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
@@ -178,36 +200,50 @@ public class RedisSessionRepository {
         }
 
         try {
-            // Get session first to clean up indices
+            // Get session first for cleanup
             var sessionOpt = findById(sessionId);
             if (sessionOpt.isEmpty()) {
-                log.debug("📭 Session not found for deletion: {}", sessionId);
                 return;
             }
 
             var session = sessionOpt.get();
 
-            // Delete main session
-            redis.delete(SESSION_PREFIX + sessionId);
+            // Execute cleanup in pipeline for better performance
+            redis.executePipelined((RedisCallback<Object>) connection -> {
+                // Delete main session
+                redis.delete(SESSION_PREFIX + sessionId);
 
-            // Delete indices
-            deleteIndices(session);
+                // Delete indices
+                if (session.getChannelId() != null) {
+                    redis.delete(CHANNEL_PREFIX + session.getChannelId());
+                }
+                if (session.getImei() != null) {
+                    redis.delete(IMEI_PREFIX + session.getImei().value());
+                }
 
-            // Remove from active sessions
-            redis.opsForSet().remove(ACTIVE_SESSIONS, sessionId);
+                // Remove from active sessions
+                redis.opsForSet().remove(ACTIVE_SESSIONS, sessionId);
 
-            // Update metrics
-            updateMetrics(session, false);
+                // Update metrics
+                redis.opsForHash().increment(METRICS_KEY, "total", -1);
+                if (session.isAuthenticated()) {
+                    redis.opsForHash().increment(METRICS_KEY, "authenticated", -1);
+                }
 
-            log.debug("✅ Session deleted: {}", sessionId);
+                return null;
+            });
+
+            if (log.isDebugEnabled()) {
+                log.debug("Session deleted: {}", sessionId);
+            }
 
         } catch (Exception e) {
-            log.error("❌ Error deleting session: {}", sessionId, e);
+            log.error("Error deleting session: {}", sessionId, e);
         }
     }
 
     /**
-     * Find all active sessions.
+     * Find all active sessions with efficient batch processing.
      */
     public List<DeviceSession> findAllActive() {
         try {
@@ -216,106 +252,67 @@ public class RedisSessionRepository {
                 return List.of();
             }
 
-            return sessionIds.stream()
+            // Use parallel processing for better performance
+            return sessionIds.parallelStream()
                     .map(Object::toString)
                     .map(this::findById)
                     .flatMap(Optional::stream)
                     .collect(Collectors.toList());
 
         } catch (Exception e) {
-            log.error("❌ Error finding all active sessions", e);
+            log.error("Error finding all active sessions", e);
             return List.of();
         }
     }
 
     /**
-     * Find idle sessions for cleanup.
+     * Find idle sessions with efficient filtering.
      */
     public List<DeviceSession> findIdle(Duration idleTimeout) {
         try {
             var cutoffTime = Instant.now().minus(idleTimeout);
             var allSessions = findAllActive();
 
-            return allSessions.stream()
+            return allSessions.parallelStream()
                     .filter(session -> session.getLastActivityAt().isBefore(cutoffTime))
                     .collect(Collectors.toList());
 
         } catch (Exception e) {
-            log.error("❌ Error finding idle sessions", e);
+            log.error("Error finding idle sessions", e);
             return List.of();
         }
     }
 
     /**
-     * Get count of active sessions.
+     * Get count of active sessions efficiently.
      */
     public long countActive() {
         try {
             var count = redis.opsForSet().size(ACTIVE_SESSIONS);
             return count != null ? count : 0L;
         } catch (Exception e) {
-            log.error("❌ Error counting active sessions", e);
+            log.error("Error counting active sessions", e);
             return 0L;
         }
     }
 
     /**
-     * Check if session exists.
+     * Check if session exists efficiently.
      */
     public boolean exists(String sessionId) {
         try {
             return Boolean.TRUE.equals(redis.hasKey(SESSION_PREFIX + sessionId));
         } catch (Exception e) {
-            log.error("❌ Error checking session existence: {}", sessionId, e);
+            log.error("Error checking session existence: {}", sessionId, e);
             return false;
         }
     }
 
     // Private helper methods
 
-    private void createIndices(DeviceSession session) {
-        // Index by channel ID
-        if (session.getChannelId() != null) {
-            var channelKey = CHANNEL_PREFIX + session.getChannelId();
-            redis.opsForValue().set(channelKey, session.getId(), INDEX_TTL);
-        }
-
-        // Index by IMEI
-        if (session.getImei() != null) {
-            var imeiKey = IMEI_PREFIX + session.getImei().value();
-            redis.opsForValue().set(imeiKey, session.getId(), INDEX_TTL);
-        }
-    }
-
-    private void deleteIndices(DeviceSession session) {
-        // Delete channel index
-        if (session.getChannelId() != null) {
-            redis.delete(CHANNEL_PREFIX + session.getChannelId());
-        }
-
-        // Delete IMEI index
-        if (session.getImei() != null) {
-            redis.delete(IMEI_PREFIX + session.getImei().value());
-        }
-    }
-
-    private void updateMetrics(DeviceSession session, boolean increment) {
-        try {
-            var delta = increment ? 1 : -1;
-            redis.opsForHash().increment(METRICS_KEY, "total", delta);
-
-            if (session.isAuthenticated()) {
-                redis.opsForHash().increment(METRICS_KEY, "authenticated", delta);
-            }
-
-            // Set TTL on metrics hash
-            redis.expire(METRICS_KEY, Duration.ofDays(1));
-
-        } catch (Exception e) {
-            log.warn("⚠️ Failed to update metrics", e);
-        }
-    }
-
+    /**
+     * Convert raw Redis data to SessionData with comprehensive error handling.
+     */
     private SessionData convertToSessionData(Object rawData, String sessionId) {
         try {
             if (rawData instanceof SessionData sessionData) {
@@ -330,13 +327,16 @@ public class RedisSessionRepository {
             return mapper.convertValue(rawData, SessionData.class);
 
         } catch (Exception e) {
-            log.error("❌ Failed to convert raw data to SessionData: {}", sessionId, e);
+            log.error("Failed to convert raw data to SessionData: {}", sessionId, e);
             // Clean up corrupted session
             redis.delete(SESSION_PREFIX + sessionId);
             return null;
         }
     }
 
+    /**
+     * Convert LinkedHashMap to SessionData safely.
+     */
     @SuppressWarnings("unchecked")
     private SessionData convertMapToSessionData(LinkedHashMap<?, ?> dataMap) {
         var map = (Map<String, Object>) dataMap;
@@ -349,8 +349,13 @@ public class RedisSessionRepository {
                 getInstantValue(map, "lastActivityAt"),
                 getBooleanValue(map, "authenticated"),
                 getStringValue(map, "remoteAddress"),
+                getDoubleValue(map, "latitude"),
+                getDoubleValue(map, "longitude"),
+                getInstantValue(map, "lastHeartbeat"),
                 getMapValue(map, "attributes"));
     }
+
+    // Safe value extraction methods
 
     private String getStringValue(Map<String, Object> map, String key) {
         var value = map.get(key);
@@ -363,6 +368,18 @@ public class RedisSessionRepository {
             return bool;
         }
         return Boolean.parseBoolean(value != null ? value.toString() : "false");
+    }
+
+    private double getDoubleValue(Map<String, Object> map, String key) {
+        var value = map.get(key);
+        if (value instanceof Number num) {
+            return num.doubleValue();
+        }
+        try {
+            return value != null ? Double.parseDouble(value.toString()) : 0.0;
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
     }
 
     private Instant getInstantValue(Map<String, Object> map, String key) {
@@ -378,7 +395,7 @@ public class RedisSessionRepository {
                 default -> mapper.convertValue(value, Instant.class);
             };
         } catch (Exception e) {
-            log.warn("⚠️ Failed to parse Instant value: {}, using current time", value);
+            log.warn("Failed to parse Instant value: {}, using current time", value);
             return Instant.now();
         }
     }
@@ -393,7 +410,7 @@ public class RedisSessionRepository {
     }
 
     /**
-     * Session Data Transfer Object for Redis serialization.
+     * Enhanced Session Data Transfer Object with all required fields.
      */
     public static class SessionData {
         private String sessionId;
@@ -403,9 +420,12 @@ public class RedisSessionRepository {
         private Instant lastActivityAt;
         private boolean authenticated;
         private String remoteAddress;
+        private Double latitude;
+        private Double longitude;
+        private Instant lastHeartbeat;
         private Map<String, Object> attributes;
 
-        // Default constructor for Jackson
+        // Default constructor
         public SessionData() {
             this.attributes = new HashMap<>();
         }
@@ -419,6 +439,9 @@ public class RedisSessionRepository {
                 @JsonProperty("lastActivityAt") Instant lastActivityAt,
                 @JsonProperty("authenticated") boolean authenticated,
                 @JsonProperty("remoteAddress") String remoteAddress,
+                @JsonProperty("latitude") Double latitude,
+                @JsonProperty("longitude") Double longitude,
+                @JsonProperty("lastHeartbeat") Instant lastHeartbeat,
                 @JsonProperty("attributes") Map<String, Object> attributes) {
             this.sessionId = sessionId;
             this.imei = imei;
@@ -427,6 +450,9 @@ public class RedisSessionRepository {
             this.lastActivityAt = lastActivityAt;
             this.authenticated = authenticated;
             this.remoteAddress = remoteAddress;
+            this.latitude = latitude;
+            this.longitude = longitude;
+            this.lastHeartbeat = lastHeartbeat;
             this.attributes = attributes != null ? attributes : new HashMap<>();
         }
 
@@ -439,45 +465,38 @@ public class RedisSessionRepository {
                     session.getLastActivityAt(),
                     session.isAuthenticated(),
                     session.getRemoteAddress(),
+                    session.getLastLatitude(),
+                    session.getLastLongitude(),
+                    session.getLastHeartbeat(),
                     new HashMap<>(session.getAttributes()));
         }
 
         public DeviceSession toDeviceSession() {
-            var imeiObj = imei != null ? IMEI.of(imei) : null;
+            // Create attributes map if needed
+            Map<String, Object> sessionAttributes = new ConcurrentHashMap<>();
+            if (attributes != null) {
+                sessionAttributes.putAll(attributes);
+            }
 
+            // Use the full constructor since DeviceSession fields are immutable
             return new DeviceSession(
-                    sessionId, // String id
-                    imeiObj, // IMEI imei
-                    channelId, // String channelId
-                    remoteAddress, // String remoteAddress
-                    null, // Channel channel
-                    null, // String protocolVersion
-                    null, // String deviceVariant
-                    DeviceSession.DeviceStatus.CONNECTED, // DeviceStatus status (FIXED)
-                    authenticated, // boolean authenticated
-                    createdAt, // Instant createdAt
-                    lastActivityAt, // Instant lastActivityAt
-                    lastActivityAt, // Instant lastLoginAt
-                    attributes != null ? attributes : Map.of() // Map<String, Object> attributes
+                    sessionId, // id
+                    imei != null ? IMEI.of(imei) : null, // imei
+                    channelId, // channelId
+                    remoteAddress, // remoteAddress
+                    null, // channel (will be set later)
+                    null, // protocolVersion
+                    null, // deviceVariant
+                    DeviceSession.DeviceStatus.CONNECTED, // status
+                    authenticated, // authenticated
+                    createdAt != null ? createdAt : Instant.now(), // createdAt
+                    lastActivityAt != null ? lastActivityAt : Instant.now(), // lastActivityAt
+                    lastActivityAt != null ? lastActivityAt : Instant.now(), // lastLoginAt
+                    sessionAttributes // attributes
             );
         }
 
-        // public DeviceSession toDeviceSession() {
-        //     var imeiObj = imei != null ? IMEI.of(imei) : null;
-
-        //     // Use the static factory method instead
-        //     var session = DeviceSession.create(imeiObj, channelId, remoteAddress);
-
-        //     // Set additional properties
-        //     session.setAuthenticated(authenticated);
-        //     if (attributes != null) {
-        //         attributes.forEach(session::setAttribute);
-        //     }
-
-        //     return session;
-        // }
-
-        // Getters and setters
+        // Getters and setters (generated for brevity)
         public String getSessionId() {
             return sessionId;
         }
@@ -532,6 +551,30 @@ public class RedisSessionRepository {
 
         public void setRemoteAddress(String remoteAddress) {
             this.remoteAddress = remoteAddress;
+        }
+
+        public Double getLatitude() {
+            return latitude;
+        }
+
+        public void setLatitude(Double latitude) {
+            this.latitude = latitude;
+        }
+
+        public Double getLongitude() {
+            return longitude;
+        }
+
+        public void setLongitude(Double longitude) {
+            this.longitude = longitude;
+        }
+
+        public Instant getLastHeartbeat() {
+            return lastHeartbeat;
+        }
+
+        public void setLastHeartbeat(Instant lastHeartbeat) {
+            this.lastHeartbeat = lastHeartbeat;
         }
 
         public Map<String, Object> getAttributes() {

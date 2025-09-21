@@ -1,373 +1,376 @@
 package com.wheelseye.devicegateway.handler;
 
 import com.wheelseye.devicegateway.model.DeviceMessage;
-import com.wheelseye.devicegateway.model.DeviceSession;
 import com.wheelseye.devicegateway.model.IMEI;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.util.AttributeKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
- * Device Business Handler - FIXED VERSION
+ * Production-ready Device Business Handler following modern Java 21 and Spring Boot 3.5.5 practices.
  * 
- * The issue was in the IMEI validation logic - it was rejecting valid 15-digit numeric IMEIs.
- * This fix corrects the validation to match the working reference implementation.
+ * Key improvements:
+ * - Comprehensive message handling for all GT06 protocol types
+ * - Asynchronous processing to prevent blocking the Netty event loop
+ * - Proper device configuration and location reporting setup
+ * - Enhanced error handling and logging
+ * - Performance optimizations with context caching
  */
 @Component
 @ChannelHandler.Sharable
-public class DeviceBusinessHandler extends ChannelInboundHandlerAdapter {
+public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMessage> {
 
-    private static final Logger logger = LoggerFactory.getLogger(DeviceBusinessHandler.class);
-    
-    @Autowired
-    private DeviceSessionService deviceSessionService;
-    
-    private final ApplicationContext applicationContext;
+    private static final Logger log = LoggerFactory.getLogger(DeviceBusinessHandler.class);
 
-    public DeviceBusinessHandler(ApplicationContext applicationContext) {
-        this.applicationContext = applicationContext;
+    // Channel attribute keys
+    private static final AttributeKey<String> IMEI_ATTR = AttributeKey.valueOf("DEVICE_IMEI");
+    private static final AttributeKey<String> SESSION_ID_ATTR = AttributeKey.valueOf("SESSION_ID");
+    private static final AttributeKey<Boolean> CONFIGURED_ATTR = AttributeKey.valueOf("DEVICE_CONFIGURED");
+
+    private final DeviceSessionService sessionService;
+
+    public DeviceBusinessHandler(DeviceSessionService sessionService) {
+        this.sessionService = sessionService;
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof DeviceMessage deviceMessage) {
-            try {
-                processDeviceMessage(ctx, deviceMessage);
-            } catch (Exception e) {
-                logger.error("Error processing device message from {}: {}", 
-                    ctx.channel().remoteAddress(), e.getMessage(), e);
-                sendErrorAck(ctx, deviceMessage);
-            }
-        } else {
-            ctx.fireChannelRead(msg);
-        }
+    protected void channelRead0(ChannelHandlerContext ctx, DeviceMessage message) throws Exception {
+        // Process message asynchronously to avoid blocking Netty event loop
+        CompletableFuture.runAsync(() -> processDeviceMessage(ctx, message))
+                .exceptionally(throwable -> {
+                    log.error("❌ Error processing message from {}: {}", 
+                            ctx.channel().remoteAddress(), throwable.getMessage(), throwable);
+                    return null;
+                });
     }
 
+    /**
+     * Process device messages based on type.
+     */
     private void processDeviceMessage(ChannelHandlerContext ctx, DeviceMessage message) {
-        String messageType = message.getType().toLowerCase();
-        String imei = resolveImei(ctx, message);
-        
-        logger.info("Processing {} message from device {} at {}", 
-            messageType, imei != null ? imei : "UNKNOWN", ctx.channel().remoteAddress());
+        try {
+            log.debug("📨 Processing {} message from device: {}", 
+                    message.getType(), message.getImei());
 
-        switch (messageType) {
-            case "login" -> handleLogin(ctx, message);
-            case "gps" -> handleGps(ctx, message);
-            case "heartbeat" -> handleHeartbeat(ctx, message);
-            case "other", "unknown" -> handleOther(ctx, message);
-            default -> handleUnknown(ctx, message);
+            switch (message.getType()) {
+                case "login" -> handleLogin(ctx, message);
+                case "gps" -> handleLocationData(ctx, message);
+                case "alarm" -> handleAlarmData(ctx, message);
+                case "heartbeat" -> handleHeartbeat(ctx, message);
+                case "string" -> handleStringMessage(ctx, message);
+                case "gps_address" -> handleAddressRequest(ctx, message);
+                default -> handleGenericMessage(ctx, message);
+            }
+
+        } catch (Exception e) {
+            log.error("❌ Error processing {} message from {}: {}", 
+                    message.getType(), ctx.channel().remoteAddress(), e.getMessage(), e);
+            sendErrorResponse(ctx);
         }
     }
 
     /**
-     * Handle login message - FIXED IMEI validation
+     * Handle device login and establish session.
      */
     private void handleLogin(ChannelHandlerContext ctx, DeviceMessage message) {
         try {
-            // CRITICAL FIX: Extract IMEI from login data where protocol decoder stored it
-            String imei = extractLoginImei(message);
+            var imeiValue = message.getImei();
+            var imei = IMEI.of(imeiValue);
             
-            // CRITICAL FIX: Corrected IMEI validation that matches working implementation
-            if (!isValidImei(imei)) {
-                logger.warn("Login rejected - invalid IMEI '{}' from {}", 
-                    imei, ctx.channel().remoteAddress());
-                ctx.close();
+            log.info("🔐 Processing login for device: {} from {}", 
+                    imeiValue, ctx.channel().remoteAddress());
+
+            // Create or update device session
+            var session = sessionService.createOrUpdateSession(imei, ctx.channel());
+            
+            // Cache session information in channel context
+            ctx.channel().attr(IMEI_ATTR).set(imeiValue);
+            ctx.channel().attr(SESSION_ID_ATTR).set(session.getId());
+
+            // Send login acknowledgment
+            sendLoginAck(ctx);
+
+            // Configure device for location reporting
+            configureDeviceForReporting(ctx, imeiValue);
+
+            log.info("✅ Device {} logged in successfully, session: {}", 
+                    imeiValue, session.getId());
+
+        } catch (Exception e) {
+            log.error("❌ Login failed for device {} from {}: {}", 
+                    message.getImei(), ctx.channel().remoteAddress(), e.getMessage(), e);
+            ctx.close(); // Close connection on login failure
+        }
+    }
+
+    /**
+     * Handle GPS location data.
+     */
+    private void handleLocationData(ChannelHandlerContext ctx, DeviceMessage message) {
+        try {
+            var data = message.getData();
+            var latitude = (Double) data.get("latitude");
+            var longitude = (Double) data.get("longitude");
+            var timestamp = (Instant) data.get("gpsTimestamp");
+            var speed = (Integer) data.get("speed");
+            var course = (Integer) data.get("course");
+
+            if (latitude != null && longitude != null) {
+                // Update session with location data asynchronously
+                sessionService.updateLastPosition(
+                        message.getImei(), 
+                        latitude, 
+                        longitude, 
+                        timestamp != null ? timestamp : Instant.now()
+                );
+
+                log.info("📍 Location update: {} -> [{:.6f}, {:.6f}] speed={}km/h course={}°", 
+                        message.getImei(), latitude, longitude, 
+                        speed != null ? speed : 0, course != null ? course : 0);
+            } else {
+                log.warn("⚠️ Invalid location data from {}: lat={}, lon={}", 
+                        message.getImei(), latitude, longitude);
+            }
+
+            // Send location acknowledgment
+            sendLocationAck(ctx);
+
+        } catch (Exception e) {
+            log.error("❌ Error processing location data from {}: {}", 
+                    message.getImei(), e.getMessage(), e);
+            sendErrorResponse(ctx);
+        }
+    }
+
+    /**
+     * Handle alarm messages (location + alert information).
+     */
+    private void handleAlarmData(ChannelHandlerContext ctx, DeviceMessage message) {
+        try {
+            // Process location data first
+            handleLocationData(ctx, message);
+
+            // Extract alarm information
+            var data = message.getData();
+            var alarmStatus = (Integer) data.get("alarmStatus");
+            
+            if (alarmStatus != null && alarmStatus != 0) {
+                log.warn("🚨 ALARM from device {}: status=0x{:02X} at [{}, {}]", 
+                        message.getImei(), alarmStatus,
+                        data.get("latitude"), data.get("longitude"));
+                
+                // Here you could implement alarm-specific logic:
+                // - Send notifications
+                // - Store alarm events
+                // - Trigger emergency protocols
+            }
+
+        } catch (Exception e) {
+            log.error("❌ Error processing alarm data from {}: {}", 
+                    message.getImei(), e.getMessage(), e);
+            sendErrorResponse(ctx);
+        }
+    }
+
+    /**
+     * Handle heartbeat/status messages.
+     */
+    private void handleHeartbeat(ChannelHandlerContext ctx, DeviceMessage message) {
+        try {
+            // Update last heartbeat timestamp
+            sessionService.updateLastHeartbeat(message.getImei());
+
+            var data = message.getData();
+            var charging = (Boolean) data.get("charging");
+            var gsmSignal = (Integer) data.get("gsmSignalStrength");
+            var voltage = (Integer) data.get("voltageLevel");
+
+            log.debug("💓 Heartbeat from {}: charging={}, gsm={}, voltage={}", 
+                    message.getImei(), charging, gsmSignal, voltage);
+
+            // Send heartbeat acknowledgment
+            sendHeartbeatAck(ctx);
+
+        } catch (Exception e) {
+            log.error("❌ Error processing heartbeat from {}: {}", 
+                    message.getImei(), e.getMessage(), e);
+            sendErrorResponse(ctx);
+        }
+    }
+
+    /**
+     * Handle string messages.
+     */
+    private void handleStringMessage(ChannelHandlerContext ctx, DeviceMessage message) {
+        try {
+            var data = message.getData();
+            var content = (String) data.get("content");
+            
+            log.info("📝 String message from {}: {}", message.getImei(), content);
+            
+            // Send acknowledgment
+            sendGenericAck(ctx);
+
+        } catch (Exception e) {
+            log.error("❌ Error processing string message from {}: {}", 
+                    message.getImei(), e.getMessage(), e);
+            sendErrorResponse(ctx);
+        }
+    }
+
+    /**
+     * Handle GPS address requests.
+     */
+    private void handleAddressRequest(ChannelHandlerContext ctx, DeviceMessage message) {
+        try {
+            // Process location data
+            handleLocationData(ctx, message);
+            
+            var data = message.getData();
+            var phoneNumber = (String) data.get("phoneNumber");
+            
+            log.info("📞 Address request from {}: phone={}", message.getImei(), phoneNumber);
+            
+            // Here you could implement reverse geocoding and SMS response
+
+        } catch (Exception e) {
+            log.error("❌ Error processing address request from {}: {}", 
+                    message.getImei(), e.getMessage(), e);
+            sendErrorResponse(ctx);
+        }
+    }
+
+    /**
+     * Handle unknown/generic messages.
+     */
+    private void handleGenericMessage(ChannelHandlerContext ctx, DeviceMessage message) {
+        log.debug("📄 Generic message from {}: type={}", 
+                message.getImei(), message.getType());
+        sendGenericAck(ctx);
+    }
+
+    /**
+     * Configure device for automatic location reporting.
+     */
+    private void configureDeviceForReporting(ChannelHandlerContext ctx, String imei) {
+        try {
+            // Check if already configured to avoid repeated commands
+            if (Boolean.TRUE.equals(ctx.channel().attr(CONFIGURED_ATTR).get())) {
                 return;
             }
 
-            // Create device session
-            try {
-                IMEI imeiObj = IMEI.of(imei);
-                DeviceSession session = deviceSessionService.createOrUpdateSession(imeiObj, ctx.channel());
-
-                if (session != null) {
-                    // Store session in channel attributes
-                    ctx.channel().attr(DeviceSession.DEVICE_SESSION_KEY).set(session);
-                    
-                    // Send login acknowledgment
-                    sendAck(ctx, message);
-                    
-                    logger.info("✅ Device {} logged in successfully from {}", 
-                        imei, ctx.channel().remoteAddress());
+            // Send configuration command for 30-second location reporting
+            // GT06 format: **,imei,C02,30s (C02=set interval, 30s=30 seconds)
+            var configCommand = String.format("**,%s,C02,30s", imei);
+            var configBuffer = ctx.alloc().buffer();
+            configBuffer.writeBytes(configCommand.getBytes());
+            
+            ctx.writeAndFlush(configBuffer).addListener(future -> {
+                if (future.isSuccess()) {
+                    ctx.channel().attr(CONFIGURED_ATTR).set(true);
+                    log.info("📡 Configuration sent to device {}: 30s location reporting", imei);
                 } else {
-                    logger.warn("❌ Session creation failed for device {} from {}", 
-                        imei, ctx.channel().remoteAddress());
-                    ctx.close();
+                    log.warn("⚠️ Failed to send configuration to device {}: {}", 
+                            imei, future.cause().getMessage());
                 }
-            } catch (Exception e) {
-                logger.error("❌ Error creating session for device {} from {}: {}", 
-                    imei, ctx.channel().remoteAddress(), e.getMessage(), e);
-                ctx.close();
-            }
-            
+            });
+
         } catch (Exception e) {
-            logger.error("❌ Login processing failed for device from {}: {}", 
-                ctx.channel().remoteAddress(), e.getMessage(), e);
-            ctx.close();
+            log.error("❌ Error configuring device {}: {}", imei, e.getMessage(), e);
         }
+    }
+
+    // Response methods
+
+    /**
+     * Send login acknowledgment.
+     */
+    private void sendLoginAck(ChannelHandlerContext ctx) {
+        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x01, (byte)0xD9, (byte)0xDC, 0x0D, 0x0A});
     }
 
     /**
-     * Handle GPS location data
+     * Send location acknowledgment.
      */
-    private void handleGps(ChannelHandlerContext ctx, DeviceMessage message) {
-        String imei = getImeiFromSession(ctx);
-        if (imei == null) return;
-
-        try {
-            Map<String, Object> data = message.getData();
-            if (data != null && hasValidGpsData(data)) {
-                Double latitude = (Double) data.get("latitude");
-                Double longitude = (Double) data.get("longitude");
-                Integer speed = (Integer) data.get("speed");
-                
-                logger.debug("📍 GPS from {}: lat={}, lon={}, speed={}km/h",
-                    imei, latitude, longitude, speed);
-                
-                // Update device position
-                updateDevicePosition(imei, latitude, longitude, getTimestamp(message));
-                
-                // Send GPS acknowledgment
-                sendAck(ctx, message);
-            } else {
-                logger.warn("⚠️ Invalid GPS data from device {}", imei);
-            }
-        } catch (Exception e) {
-            logger.error("❌ Error processing GPS data from {}: {}", imei, e.getMessage(), e);
-        }
+    private void sendLocationAck(ChannelHandlerContext ctx) {
+        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x02, (byte)0xD9, (byte)0xDD, 0x0D, 0x0A});
     }
 
     /**
-     * Handle heartbeat/status message
+     * Send heartbeat acknowledgment.
      */
-    private void handleHeartbeat(ChannelHandlerContext ctx, DeviceMessage message) {
-        String imei = getImeiFromSession(ctx);
-        if (imei == null) return;
-
-        try {
-            Map<String, Object> data = message.getData();
-            if (data != null) {
-                Integer voltage = (Integer) data.get("voltageLevel");
-                Integer signal = (Integer) data.get("gsmSignalStrength");
-                Boolean charging = (Boolean) data.get("charging");
-                
-                logger.debug("💓 Heartbeat from {}: battery={}, signal={}, charging={}",
-                    imei, voltage, signal, charging);
-            }
-            
-            // Update last heartbeat timestamp
-            updateDeviceHeartbeat(imei);
-            
-            // Send heartbeat acknowledgment
-            sendAck(ctx, message);
-            
-        } catch (Exception e) {
-            logger.error("❌ Error processing heartbeat from {}: {}", imei, e.getMessage(), e);
-        }
+    private void sendHeartbeatAck(ChannelHandlerContext ctx) {
+        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x03, (byte)0xD9, (byte)0xDE, 0x0D, 0x0A});
     }
 
     /**
-     * Handle other/unknown message types
+     * Send generic acknowledgment.
      */
-    private void handleOther(ChannelHandlerContext ctx, DeviceMessage message) {
-        String imei = getImeiFromSessionOrMessage(ctx, message);
-        logger.info("📝 Other message from {}: protocol={}", 
-            imei != null ? imei : "UNKNOWN", 
-            message.getData() != null ? message.getData().get("protocolId") : "unknown");
-
-        // Send acknowledgment
-        sendAck(ctx, message);
+    private void sendGenericAck(ChannelHandlerContext ctx) {
+        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x00, (byte)0xD9, (byte)0xDB, 0x0D, 0x0A});
     }
 
-    private void handleUnknown(ChannelHandlerContext ctx, DeviceMessage message) {
-        logger.warn("❓ Unknown message type '{}' from {}", 
-            message.getType(), ctx.channel().remoteAddress());
-        sendAck(ctx, message);
+    /**
+     * Send error response.
+     */
+    private void sendErrorResponse(ChannelHandlerContext ctx) {
+        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, (byte)0xFF, (byte)0xFF, (byte)0xD8, (byte)0xDA, 0x0D, 0x0A});
     }
 
-    // CRITICAL FIX: Proper IMEI extraction from login data
-    private String extractLoginImei(DeviceMessage message) {
-        // First, check if IMEI was extracted and stored in login data by protocol decoder
-        if (message.getData() != null && message.getData().containsKey("loginImei")) {
-            Object loginImei = message.getData().get("loginImei");
-            if (loginImei != null) {
-                String imei = loginImei.toString();
-                logger.info("📱 Extracted IMEI from login data: {}", imei);
-                return imei;
-            }
-        }
-        
-        // Fallback to message IMEI field
-        String imei = message.getImei();
-        logger.debug("📱 Using message IMEI field: {}", imei);
-        return imei;
-    }
-
-    // CRITICAL FIX: Corrected IMEI validation that matches working implementation
-    private boolean isValidImei(String imei) {
-        if (imei == null || imei.trim().isEmpty()) {
-            logger.debug("IMEI validation failed: null or empty");
-            return false;
-        }
-        
-        // Remove whitespace
-        imei = imei.trim();
-        
-        // Check for placeholder values
-        if (imei.startsWith("UNKNOWN") || imei.startsWith("DEVICE_")) {
-            logger.debug("IMEI validation failed: placeholder value: {}", imei);
-            return false;
-        }
-        
-        // Check length (must be exactly 15 digits)
-        if (imei.length() != 15) {
-            logger.debug("IMEI validation failed: invalid length {}: {}", imei.length(), imei);
-            return false;
-        }
-        
-        // CRITICAL FIX: Use simple character-by-character validation instead of regex
-        for (int i = 0; i < imei.length(); i++) {
-            char c = imei.charAt(i);
-            if (c < '0' || c > '9') {
-                logger.debug("IMEI validation failed: non-digit character '{}' at position {} in: {}", 
-                    c, i, imei);
-                return false;
-            }
-        }
-        
-        // Additional check: IMEI should not be all zeros
-        if ("000000000000000".equals(imei)) {
-            logger.debug("IMEI validation failed: all zeros");
-            return false;
-        }
-        
-        logger.debug("IMEI validation passed: {}", imei);
-        return true;
-    }
-
-    private String resolveImei(ChannelHandlerContext ctx, DeviceMessage message) {
-        String imei = message.getImei();
-        
-        // For login messages, extract from login data
-        if ("login".equals(message.getType())) {
-            return extractLoginImei(message);
-        }
-        
-        // For other messages, try session first
-        if (!isValidImei(imei)) {
-            imei = getImeiFromSession(ctx);
-        }
-        
-        return imei;
-    }
-
-    private String getImeiFromSession(ChannelHandlerContext ctx) {
-        DeviceSession session = ctx.channel().attr(DeviceSession.DEVICE_SESSION_KEY).get();
-        if (session != null) {
-            return session.getImei().value();
-        }
-        
-        logger.error("❌ No device session found for channel {}", ctx.channel().remoteAddress());
-        ctx.close();
-        return null;
-    }
-
-    private String getImeiFromSessionOrMessage(ChannelHandlerContext ctx, DeviceMessage message) {
-        String imei = getImeiFromSession(ctx);
-        if (imei == null) {
-            imei = message.getImei();
-        }
-        return imei;
-    }
-
-    private boolean hasValidGpsData(Map<String, Object> data) {
-        return data.containsKey("latitude") && data.containsKey("longitude") &&
-               data.get("latitude") instanceof Double && data.get("longitude") instanceof Double;
-    }
-
-    private Instant getTimestamp(DeviceMessage message) {
-        if (message.getData() != null && message.getData().containsKey("timestamp")) {
-            return (Instant) message.getData().get("timestamp");
-        }
-        return message.getTimestamp();
-    }
-
-    // Service integration methods
-    private void updateDevicePosition(String imei, double latitude, double longitude, Instant timestamp) {
+    /**
+     * Send response to device.
+     */
+    private void sendResponse(ChannelHandlerContext ctx, byte[] response) {
         try {
-            if (deviceSessionService != null) {
-                deviceSessionService.updateLastPosition(imei, latitude, longitude, timestamp);
-            }
+            var buffer = ctx.alloc().buffer(response.length);
+            buffer.writeBytes(response);
+            ctx.writeAndFlush(buffer);
         } catch (Exception e) {
-            logger.debug("Error updating device position: {}", e.getMessage());
+            log.error("❌ Failed to send response to {}: {}", 
+                    ctx.channel().remoteAddress(), e.getMessage(), e);
         }
     }
 
-    private void updateDeviceHeartbeat(String imei) {
-        try {
-            if (deviceSessionService != null) {
-                deviceSessionService.updateLastHeartbeat(imei);
-            }
-        } catch (Exception e) {
-            logger.debug("Error updating device heartbeat: {}", e.getMessage());
-        }
-    }
-
-    // Response methods - Send simple ACK responses matching GT06 protocol
-    private void sendAck(ChannelHandlerContext ctx, DeviceMessage message) {
-        try {
-            // Echo the message back as acknowledgment (GT06 protocol expects this)
-            DeviceMessage ack = new DeviceMessage(
-                message.getImei(), "GT06", message.getType(), Instant.now(), message.getData());
-            ctx.writeAndFlush(ack);
-            
-            logger.debug("➡️ Sent ACK for {} to {}", 
-                message.getType(), ctx.channel().remoteAddress());
-        } catch (Exception e) {
-            logger.error("Failed to send ACK: {}", e.getMessage());
-        }
-    }
-
-    private void sendErrorAck(ChannelHandlerContext ctx, DeviceMessage message) {
-        try {
-            sendAck(ctx, message);
-        } catch (Exception e) {
-            logger.error("Failed to send error ACK: {}", e.getMessage());
-        }
-    }
-
-    // Channel lifecycle methods
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        DeviceSession session = ctx.channel().attr(DeviceSession.DEVICE_SESSION_KEY).get();
-        if (session != null) {
-            logger.info("📤 Device {} disconnected from {}", 
-                session.getImei().value(), ctx.channel().remoteAddress());
+        var imei = ctx.channel().attr(IMEI_ATTR).get();
+        var sessionId = ctx.channel().attr(SESSION_ID_ATTR).get();
+        
+        if (imei != null) {
+            log.info("📵 Device {} disconnected (session: {})", imei, sessionId);
             
+            // Remove session on disconnect
             try {
-                if (deviceSessionService != null) {
-                    deviceSessionService.removeSession(session.getId());
-                }
+                sessionService.removeSession(ctx.channel());
             } catch (Exception e) {
-                logger.error("Error removing session on disconnect: {}", e.getMessage());
+                log.error("❌ Error removing session on disconnect: {}", e.getMessage(), e);
             }
+        } else {
+            log.debug("📵 Unknown device disconnected from {}", ctx.channel().remoteAddress());
         }
+        
         super.channelInactive(ctx);
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        logger.error("Business handler exception from {}: {}", 
-            ctx.channel().remoteAddress(), cause.getMessage(), cause);
+        var imei = ctx.channel().attr(IMEI_ATTR).get();
+        log.error("❌ Handler exception for device {} from {}: {}", 
+                imei != null ? imei : "UNKNOWN", 
+                ctx.channel().remoteAddress(), 
+                cause.getMessage(), cause);
+        
+        // Close connection on severe errors
         ctx.close();
     }
 }
