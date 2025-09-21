@@ -425,7 +425,7 @@ public class RedisSessionRepository {
             
             -- Add to active sessions set
             redis.call("SADD", activeSet, sessionId)
-            redis.call("EXPIRE", activeSet, indexTtl)`
+            redis.call("EXPIRE", activeSet, indexTtl)
             
             -- Update metrics
             redis.call("HINCRBY", metricsKey, "total:sessions", "1")
