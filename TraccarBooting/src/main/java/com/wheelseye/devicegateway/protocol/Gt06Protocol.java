@@ -10,32 +10,31 @@ import io.netty.channel.ChannelHandler;
  * Complete Gt06 protocol implementation following Spring Boot 3.5.5 standards.
  * Provides proper handler lifecycle management and configuration.
  */
-@Component("Gt06Protocol")
+@Component("gt06Protocol") // Use consistent naming
 public final class Gt06Protocol implements Protocol {
-    
+ 
     private final ApplicationContext applicationContext;
     private final Gt06ProtocolDecoder protocolDecoder;
     private final Gt06ProtocolEncoder protocolEncoder;
     private final ProtocolConfig config;
-    
+ 
     public Gt06Protocol(ApplicationContext applicationContext,
                        Gt06ProtocolDecoder protocolDecoder,
                        Gt06ProtocolEncoder protocolEncoder) {
         this.applicationContext = applicationContext;
         this.protocolDecoder = protocolDecoder;
         this.protocolEncoder = protocolEncoder;
-        
+     
         // Gt06 uses custom frame decoder, not length-field framing
         this.config = ProtocolConfig.builder()
-            .useLengthFieldFraming(false)  // Custom Gt06 framing
+            .useLengthFieldFraming(false) // Custom Gt06 framing
             .lengthFieldOffset(0)
             .lengthFieldLength(0)
             .lengthAdjustment(0)
             .initialBytesToStrip(0)
             .prependLengthOnOutbound(false)
             .build();
-    }
-    
+    }    
     @Override
     public String name() {
         return "Gt06";

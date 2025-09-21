@@ -7,7 +7,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Scope;
 
-
 /**
  * GT06 Handler Configuration - Production Ready
  * 
@@ -23,7 +22,7 @@ public class Gt06HandlerConfiguration {
      */
     @Bean
     @Scope("prototype")
-    public Gt06FrameDecoder Gt06FrameDecoder() {
+    public Gt06FrameDecoder gt06FrameDecoder() {
         System.out.println("🔧 Creating Gt06FrameDecoder bean");
         return new Gt06FrameDecoder();
     }
@@ -33,9 +32,8 @@ public class Gt06HandlerConfiguration {
      * Stateless decoder can be shared across all channels
      */
     @Bean
-    public Gt06ProtocolDecoder Gt06ProtocolDecoder() {
+    public Gt06ProtocolDecoder gt06ProtocolDecoder() {
         System.out.println("🔧 Creating Gt06ProtocolDecoder bean");
-
         return new Gt06ProtocolDecoder();
     }
 
@@ -44,7 +42,7 @@ public class Gt06HandlerConfiguration {
      * Stateless encoder can be shared across all channels
      */
     @Bean
-    public Gt06ProtocolEncoder Gt06ProtocolEncoder() {
+    public Gt06ProtocolEncoder gt06ProtocolEncoder() {
         System.out.println("🔧 Creating Gt06ProtocolEncoder bean");
         return new Gt06ProtocolEncoder();
     }

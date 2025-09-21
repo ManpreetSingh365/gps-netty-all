@@ -1,14 +1,16 @@
 server:
-  port: ${SERVER_PORT:8081}  # default 8081
-  address: 0.0.0.0           # bind to all interfaces
+  port: ${SERVER_PORT:8081}
+  address: 0.0.0.0
 
 spring:
   application:
     name: device-gateway-service
-
-  # Allow circular references as a temporary fix until we can refactor
   main:
     allow-circular-references: true
+  task:
+    scheduling:
+      pool:
+        size: 1
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
@@ -22,7 +24,6 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
-
     listener:
       ack-mode: MANUAL_IMMEDIATE
 
@@ -31,8 +32,6 @@ spring:
       host: ${REDIS_HOST:redis}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
-      # database: ${REDIS_DATABASE:0}
-      # timeout: 2s
 
 device-gateway:
   tcp:
@@ -51,11 +50,9 @@ device-gateway:
       commands-outbound: commands.outbound
 
   session:
-    idle-timeout: ${DEVICE_GATEWAY_SESSION_IDLE_TIMEOUT:600}
-    cleanup-interval: ${DEVICE_GATEWAY_SESSION_CLEANUP_INTERVAL:60}
-    idle-timeout-seconds: ${SESSION_IDLE_TIMEOUT_SECONDS:600}
+    cleanup-interval: ${DEVICE_GATEWAY_SESSION_CLEANUP_INTERVAL:300000}  # FIXED: 5 minutes instead of 60s
+    idle-timeout-seconds: ${SESSION_IDLE_TIMEOUT_SECONDS:1800}
     max-sessions: ${MAX_SESSIONS:10000}
-
 
 logging:
   level:

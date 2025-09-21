@@ -23,7 +23,7 @@ public class ProtocolConfiguration {
         this.protocolFactory = protocolFactory;
         this.gt06Protocol = gt06Protocol;
     }
-    // Add other protocols as they become available
+        // Add other protocols as they become available
     // @Autowired private T355Protocol t355Protocol;
     // @Autowired private Gt02Protocol gt02Protocol;
 

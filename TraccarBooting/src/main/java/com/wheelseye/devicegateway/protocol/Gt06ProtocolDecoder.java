@@ -26,7 +26,6 @@ import java.util.Map;
  * - Modern Java patterns and clean code principles
  * - Performance optimizations with channel context caching
  */
-@Component
 @ChannelHandler.Sharable
 public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
 

@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Production-ready Device Session Service with performance optimizations.
  * 
  * Key improvements:
+ * - Fixed excessive logging from scheduled tasks
  * - Reduced session lookup frequency to fix excessive Redis queries
  * - Asynchronous position updates to prevent blocking
  * - Comprehensive health monitoring with detailed metrics
@@ -43,6 +44,7 @@ public class DeviceSessionService implements HealthIndicator {
     private final AtomicLong sessionUpdatedCount = new AtomicLong(0);
     private final AtomicLong positionUpdateCount = new AtomicLong(0);
     private final AtomicLong heartbeatCount = new AtomicLong(0);
+    private final AtomicLong cleanupRunCount = new AtomicLong(0);
 
     private final RedisSessionRepository sessionRepository;
     private final Duration sessionIdleTimeout;
@@ -55,6 +57,9 @@ public class DeviceSessionService implements HealthIndicator {
         this.sessionRepository = Objects.requireNonNull(sessionRepository, "Session repository must not be null");
         this.sessionIdleTimeout = Duration.ofSeconds(idleTimeoutSeconds);
         this.maxSessions = maxSessions;
+        
+        log.info("🔧 DeviceSessionService initialized - idleTimeout: {}s, maxSessions: {}", 
+                 idleTimeoutSeconds, maxSessions);
     }
 
     /**
@@ -73,8 +78,7 @@ public class DeviceSessionService implements HealthIndicator {
                 var session = existing.get();
                 log.info("🔄 Updating existing session for device: {}", imei.value());
 
-                // Since channelId and remoteAddress are immutable, we can only update the
-                // channel
+                // Since channelId and remoteAddress are immutable, we can only update the channel
                 session.setChannel(channel);
                 session.touch(); // Updates lastActivityAt
 
@@ -178,8 +182,8 @@ public class DeviceSessionService implements HealthIndicator {
                 sessionRepository.save(session);
                 heartbeatCount.incrementAndGet();
 
-                // Only log heartbeat every 10th time to reduce log spam
-                if (heartbeatCount.get() % 10 == 0) {
+                // Only log heartbeat every 100th time to reduce log spam
+                if (heartbeatCount.get() % 100 == 0) {
                     log.debug("💓 Heartbeat batch update for {}: count={}",
                             imei, heartbeatCount.get());
                 }
@@ -269,6 +273,7 @@ public class DeviceSessionService implements HealthIndicator {
     public boolean disconnectDevice(IMEI imei) {
         try {
             var sessionOpt = sessionRepository.findByImei(imei);
+
             if (sessionOpt.isPresent()) {
                 var session = sessionOpt.get();
                 removeSession(session.getId());
@@ -279,6 +284,7 @@ public class DeviceSessionService implements HealthIndicator {
                 log.debug("📭 No active session found for device: {}", imei.value());
                 return false;
             }
+
         } catch (Exception e) {
             log.error("❌ Error disconnecting device {}: {}", imei.value(), e.getMessage(), e);
             return false;
@@ -286,13 +292,16 @@ public class DeviceSessionService implements HealthIndicator {
     }
 
     /**
-     * FIXED: Scheduled cleanup reduced to prevent excessive Redis queries.
-     * Changed from 1 minute to 5 minutes to reduce the repetitive session lookups.
+     * FIXED: Scheduled cleanup with proper interval and reduced logging.
+     * Runs every 5 minutes (300,000ms) instead of every 60ms to prevent log spam.
      */
-    @Scheduled(fixedRateString = "${device-gateway.session.cleanup-interval:300000}") // 5 minutes
+    @Scheduled(fixedDelay = 300000) // 5 minutes fixed delay (not rate-based)
     @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
     public void cleanupIdleSessions() {
+        // Run cleanup asynchronously to prevent blocking
         CompletableFuture.runAsync(() -> {
+            long runNumber = cleanupRunCount.incrementAndGet();
+            
             try {
                 var startTime = Instant.now();
                 var idleSessions = sessionRepository.findIdle(sessionIdleTimeout);
@@ -310,16 +319,20 @@ public class DeviceSessionService implements HealthIndicator {
 
                 var duration = Duration.between(startTime, Instant.now());
 
+                // Only log when there are sessions to clean or every 12th run (1 hour)
                 if (cleanedUp > 0) {
-                    log.info("🧹 Cleaned up {} idle sessions in {}ms",
-                            cleanedUp, duration.toMillis());
+                    log.info("🧹 Cleaned up {} idle sessions in {}ms (run #{})",
+                            cleanedUp, duration.toMillis(), runNumber);
+                } else if (runNumber % 12 == 0) {
+                    log.info("🧹 Session cleanup completed - no idle sessions found (run #{}, {}ms)",
+                            runNumber, duration.toMillis());
                 } else {
-                    log.debug("🧹 No idle sessions to clean (checked in {}ms)",
-                            duration.toMillis());
+                    log.debug("🧹 No idle sessions to clean (run #{}, checked in {}ms)",
+                            runNumber, duration.toMillis());
                 }
 
             } catch (Exception e) {
-                log.error("❌ Error during session cleanup", e);
+                log.error("❌ Error during session cleanup (run #{}): {}", runNumber, e.getMessage(), e);
             }
         });
     }
@@ -342,13 +355,13 @@ public class DeviceSessionService implements HealthIndicator {
                     .withDetail("maxSessions", maxSessions)
                     .withDetail("sessionUtilization", String.format("%.1f%%", utilization))
                     .withDetail("idleTimeout", sessionIdleTimeout.toString())
+                    .withDetail("cleanupRuns", cleanupRunCount.get())
                     .withDetail("performanceCounters", Map.of(
                             "sessionsCreated", stats.sessionsCreated(),
                             "sessionsUpdated", stats.sessionsUpdated(),
                             "positionUpdates", stats.positionUpdates(),
                             "heartbeats", stats.heartbeats()))
                     .build();
-
         } catch (Exception e) {
             return Health.down()
                     .withDetail("error", e.getMessage())
