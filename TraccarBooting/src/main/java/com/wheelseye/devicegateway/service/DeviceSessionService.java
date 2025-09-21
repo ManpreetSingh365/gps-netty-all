@@ -43,7 +43,7 @@ public class DeviceSessionService {
     /**
      * Create or update device session
      */
-    @CacheEvict(value = {"device-sessions", "session-stats"}, allEntries = true)
+    @CacheEvict(value = { "device-sessions", "session-stats" }, allEntries = true)
     public DeviceSession createOrUpdateSession(IMEI imei, Channel channel) {
         Objects.requireNonNull(imei, "IMEI must not be null");
         Objects.requireNonNull(channel, "Channel must not be null");
@@ -57,8 +57,8 @@ public class DeviceSessionService {
 
                 // Update channel and activity
                 session.setChannel(channel)
-                       .touch()
-                       .setAuthenticated(true);
+                        .touch()
+                        .setAuthenticated(true);
 
                 return sessionRepository.save(session);
             } else {
@@ -66,8 +66,8 @@ public class DeviceSessionService {
             }
 
         } catch (Exception e) {
-            log.error("❌ Error creating/updating session for {}: {}", 
-                     imei.masked(), e.getMessage(), e);
+            log.error("❌ Error creating/updating session for {}: {}",
+                    imei.masked(), e.getMessage(), e);
             throw new RuntimeException("Failed to create/update session", e);
         }
     }
@@ -76,8 +76,8 @@ public class DeviceSessionService {
      * Update device position asynchronously
      */
     @Async
-    public CompletableFuture<Void> updateLastPosition(String imei, double latitude, 
-                                                     double longitude, Instant timestamp) {
+    public CompletableFuture<Void> updateLastPosition(String imei, double latitude,
+            double longitude, Instant timestamp) {
         return CompletableFuture.runAsync(() -> {
             try {
                 var imeiObj = IMEI.of(imei);
@@ -87,14 +87,14 @@ public class DeviceSessionService {
                     var session = sessionOpt.get();
 
                     session.setLastLatitude(latitude)
-                           .setLastLongitude(longitude)
-                           .setLastPositionTime(timestamp)
-                           .touch();
+                            .setLastLongitude(longitude)
+                            .setLastPositionTime(timestamp)
+                            .touch();
 
                     sessionRepository.save(session);
 
-                    log.debug("📍 Updated position for {}: [{:.6f}, {:.6f}]", 
-                             imeiObj.masked(), latitude, longitude);
+                    log.debug("📍 Updated position for {}: [{:.6f}, {:.6f}]",
+                            imeiObj.masked(), latitude, longitude);
                 } else {
                     log.warn("⚠️ No session found for position update: {}", imeiObj.masked());
                 }
@@ -147,33 +147,34 @@ public class DeviceSessionService {
     /**
      * Get session statistics
      */
-    @Cacheable("session-stats")
-    public SessionStats getSessionStats() {
-        try {
-            var stats = sessionRepository.getSessionStatistics();
+    // @Cacheable("session-stats")
+    // public SessionStats getSessionStats() {
+    //     try {
+    //         var stats = sessionRepository.getSessionStatistics();
 
-            return SessionStats.builder()
-                    .totalSessions(stats.getOrDefault("total", 0L))
-                    .authenticatedSessions(stats.getOrDefault("authenticated", 0L))
-                    .activeChannels(stats.getOrDefault("active", 0L))
-                    .sessionsWithLocation(stats.getOrDefault("withLocation", 0L))
-                    .createdSessionsCount(sessionCreatedCount.get())
-                    .cleanupRunsCount(cleanupRunCount.get())
-                    .lastUpdateTime(Instant.now())
-                    .build();
+    //         return SessionStats.builder()
+    //                 .totalSessions(((Number) stats.getOrDefault("total", 0L)).longValue())
+    //                 .authenticatedSessions(((Number) stats.getOrDefault("authenticated", 0L)).longValue())
+    //                 .activeChannels(((Number) stats.getOrDefault("active", 0L)).longValue())
+    //                 .sessionsWithLocation(((Number) stats.getOrDefault("withLocation", 0L)).longValue())
+    //                 .createdSessionsCount(sessionCreatedCount.get())
+    //                 .cleanupRunsCount(cleanupRunCount.get())
+    //                 .lastUpdateTime(Instant.now())
+    //                 .build();
 
-        } catch (Exception e) {
-            log.error("❌ Error getting session stats: {}", e.getMessage(), e);
-            return SessionStats.empty();
-        }
-    }
+    //     } catch (Exception e) {
+    //         log.error("❌ Error getting session stats: {}", e.getMessage(), e);
+    //         return SessionStats.empty();
+    //     }
+    // }
 
     /**
      * Remove session by channel
      */
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
     public void removeSession(Channel channel) {
-        if (channel == null) return;
+        if (channel == null)
+            return;
 
         try {
             var channelId = channel.id().asShortText();
@@ -186,15 +187,15 @@ public class DeviceSessionService {
             }
 
         } catch (Exception e) {
-            log.error("❌ Error removing session for channel {}: {}", 
-                     channel.id().asShortText(), e.getMessage(), e);
+            log.error("❌ Error removing session for channel {}: {}",
+                    channel.id().asShortText(), e.getMessage(), e);
         }
     }
 
     /**
      * Remove session by ID
      */
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
     public void removeSession(String sessionId) {
         try {
             sessionRepository.deleteById(sessionId);
@@ -207,7 +208,7 @@ public class DeviceSessionService {
     /**
      * Disconnect device by IMEI
      */
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
     public boolean disconnectDevice(IMEI imei) {
         try {
             var sessionOpt = sessionRepository.findByImei(imei.value());
@@ -223,7 +224,7 @@ public class DeviceSessionService {
                 // Remove session
                 sessionRepository.deleteById(session.getId());
 
-                log.info("📵 Disconnected device: {} (session: {})", 
+                log.info("📵 Disconnected device: {} (session: {})",
                         imei.masked(), session.getId());
                 return true;
             } else {
@@ -241,7 +242,7 @@ public class DeviceSessionService {
      * Scheduled cleanup of idle sessions
      */
     @Scheduled(fixedDelay = 300000) // 5 minutes
-    @CacheEvict(value = {"device-sessions", "session-stats", "session-by-imei"}, allEntries = true)
+    @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
     public void cleanupIdleSessions() {
         CompletableFuture.runAsync(() -> {
             long runNumber = cleanupRunCount.incrementAndGet();
@@ -262,7 +263,7 @@ public class DeviceSessionService {
                         sessionRepository.deleteById(session.getId());
                         cleanedUp++;
                     } catch (Exception e) {
-                        log.error("❌ Error cleaning session {}: {}", 
+                        log.error("❌ Error cleaning session {}: {}",
                                 session.getId(), e.getMessage(), e);
                     }
                 }
@@ -270,7 +271,7 @@ public class DeviceSessionService {
                 var duration = Instant.now().toEpochMilli() - startTime.toEpochMilli();
 
                 if (cleanedUp > 0) {
-                    log.info("🧹 Cleanup #{}: Removed {} idle sessions in {}ms", 
+                    log.info("🧹 Cleanup #{}: Removed {} idle sessions in {}ms",
                             runNumber, cleanedUp, duration);
                 } else {
                     log.debug("🧹 Cleanup #{}: No idle sessions found ({}ms)", runNumber, duration);

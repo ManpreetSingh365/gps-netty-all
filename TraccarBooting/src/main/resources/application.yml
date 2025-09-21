@@ -12,6 +12,8 @@ spring:
     scheduling:
       pool:
         size: 1
+  session:
+    idle-timeout: 600  # 10 minutes
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
@@ -34,25 +36,29 @@ spring:
       host: ${REDIS_HOST:redis}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
-      timeout: 2000ms
-      database: 0
+      timeout: 10s
+      connect-timeout: 10s
+      client-type: lettuce
       lettuce:
         pool:
-          max-active: 8
-          max-idle: 8
+          enabled: true
+          max-active: 20
+          max-idle: 10
           min-idle: 2
-          max-wait: 2000ms
+          max-wait: 10s
+        shutdown-timeout: 200ms
+      jedis:
+        pool:
+          enabled: false
 
   # Cache Configuration
   cache:
     type: redis
     redis:
-      time-to-live: 300000  # 5 minutes
+      time-to-live: 30m
       cache-null-values: false
-    cache-names:
-      - device-sessions
-      - session-stats
-      - session-by-imei
+      key-prefix: "wheelseye:cache:"
+      use-key-prefix: true
 
 
 
@@ -81,17 +87,22 @@ device-gateway:
 # Logging Configuration
 logging:
   level:
-    com.wheelseye.devicegateway: INFO
-    com.wheelseye.devicegateway.protocol: DEBUG
-    com.wheelseye.devicegateway.service: DEBUG
-    com.wheelseye.devicegateway.repository: DEBUG
-    org.springframework.cache: DEBUG
-    org.springframework.data.redis: DEBUG
-    root: WARN
+    root: INFO
+    com.wheelseye.devicegateway: DEBUG
+    org.springframework.data.redis: INFO
+    org.springframework.cache: INFO
+    io.netty: INFO
+    org.apache.kafka: INFO
   pattern:
-    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    console: "%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(%5p) %clr(${PID:- }){magenta} %clr(---){faint} %clr([%15.15t]){faint} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m%n%wEx"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} %5p ${PID:- } --- [%t] %-40.40logger{39} : %m%n"
   file:
     name: logs/device-gateway.log
+  logback:
+    rollingpolicy:
+      max-file-size: 100MB
+      max-history: 10
+      total-size-cap: 1GB
 
 management:
   endpoints:
