@@ -273,20 +273,20 @@ public final class Gt06ProtocolTestSuite {
             final Object decoded = channel.readInbound();
             
             if (decoded instanceof DeviceMessage message) {
-                final boolean typeMatch = expectedType.equals(message.getType());
-                final boolean imeiMatch = expectedImei == null || expectedImei.equals(message.getImei());
+                final boolean typeMatch = expectedType.equals(message.type());
+                final boolean imeiMatch = expectedImei == null || expectedImei.equals(message.imei());
                 
                 if (typeMatch && imeiMatch) {
                     results.addSuccess(testName, String.format("Type=%s, IMEI=%s", 
-                        message.getType(), message.getImei()));
+                        message.type(), message.imei()));
                     System.out.printf("✅ %-15s: Type=%s, IMEI=%s, Fields=%d%n", 
-                        testName, message.getType(), message.getImei(), 
-                        message.getData() != null ? message.getData().size() : 0);
+                        testName, message.type(), message.imei(), 
+                        message.data() != null ? message.data().size() : 0);
                 } else {
                     results.addFailure(testName, String.format("Type mismatch: expected %s, got %s", 
-                        expectedType, message.getType()));
+                        expectedType, message.type()));
                     System.out.printf("❌ %-15s: Type mismatch - expected %s, got %s%n", 
-                        testName, expectedType, message.getType());
+                        testName, expectedType, message.type());
                 }
             } else {
                 results.addFailure(testName, "Failed to decode message");

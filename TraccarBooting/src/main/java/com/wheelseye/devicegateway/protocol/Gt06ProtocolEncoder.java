@@ -1,179 +1,287 @@
 package com.wheelseye.devicegateway.protocol;
 
+import com.wheelseye.devicegateway.model.DeviceMessage;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.MessageToMessageEncoder;
+import io.netty.handler.codec.MessageToByteEncoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
-import com.wheelseye.devicegateway.model.DeviceMessage;
-
-import java.util.List;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
- * GT06 Protocol Encoder - Production Implementation
+ * Production-ready GT06 Protocol Encoder for GPS device communication.
  * 
- * Encodes response messages back to GT06 devices according to official specification.
- * Supports acknowledgment responses for login, GPS, heartbeat, and alarm messages.
+ * Updated to use modern, non-deprecated Netty APIs compatible with latest versions.
+ * Supports all GT06 protocol message types with proper encoding and validation.
  */
+@Component
 @ChannelHandler.Sharable
-public final class Gt06ProtocolEncoder extends MessageToMessageEncoder<DeviceMessage> {
+public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
 
     private static final Logger log = LoggerFactory.getLogger(Gt06ProtocolEncoder.class);
-    
-    // Protocol constants
-    private static final int START_BITS = 0x7878;
-    private static final int STOP_BITS = 0x0D0A;
-    
-    // CRC-ITU lookup table for fast CRC calculation
-    private static final int[] CRC_TABLE = {
-        0x0000, 0x1189, 0x2312, 0x329B, 0x4624, 0x57AD, 0x6536, 0x74BF,
-        0x8C48, 0x9DC1, 0xAF5A, 0xBED3, 0xCA6C, 0xDBE5, 0xE97E, 0xF8F7,
-        0x1081, 0x0108, 0x3393, 0x221A, 0x56A5, 0x472C, 0x75B7, 0x643E,
-        0x9CC9, 0x8D40, 0xBFDB, 0xAE52, 0xDAED, 0xCB64, 0xF9FF, 0xE876,
-        0x2102, 0x308B, 0x0210, 0x1399, 0x6726, 0x76AF, 0x4434, 0x55BD,
-        0xAD4A, 0xBCC3, 0x8E58, 0x9FD1, 0xEB6E, 0xFAE7, 0xC87C, 0xD9F5,
-        0x3183, 0x200A, 0x1291, 0x0318, 0x77A7, 0x662E, 0x54B5, 0x453C,
-        0xBDCB, 0xAC42, 0x9ED9, 0x8F50, 0xFBEF, 0xEA66, 0xD8FD, 0xC974,
-        0x4204, 0x538D, 0x6116, 0x709F, 0x0420, 0x15A9, 0x2732, 0x36BB,
-        0xCE4C, 0xDFC5, 0xED5E, 0xFCD7, 0x8868, 0x99E1, 0xAB7A, 0xBAF3,
-        0x5285, 0x430C, 0x7197, 0x601E, 0x14A1, 0x0528, 0x37B3, 0x263A,
-        0xDECD, 0xCF44, 0xFDDF, 0xEC56, 0x98E9, 0x8960, 0xBBFB, 0xAA72,
-        0x6306, 0x728F, 0x4014, 0x519D, 0x2522, 0x34AB, 0x0630, 0x17B9,
-        0xEF4E, 0xFEC7, 0xCC5C, 0xDDD5, 0xA96A, 0xB8E3, 0x8A78, 0x9BF1,
-        0x7387, 0x620E, 0x5095, 0x411C, 0x35A3, 0x242A, 0x16B1, 0x0738,
-        0xFFCF, 0xEE46, 0xDCDD, 0xCD54, 0xB9EB, 0xA862, 0x9AF9, 0x8B70
-        // ... truncated for brevity, full table would be 256 entries
-    };
+
+    // GT06 Protocol Constants
+    private static final byte[] START_BITS = {0x78, 0x78};
+    private static final byte[] END_BITS = {0x0D, 0x0A};
+
+    // Protocol Numbers
+    private static final byte PROTOCOL_LOGIN_RESPONSE = 0x01;
+    private static final byte PROTOCOL_GPS_RESPONSE = 0x02;
+    private static final byte PROTOCOL_HEARTBEAT_RESPONSE = 0x03;
+    private static final byte PROTOCOL_STRING_RESPONSE = 0x04;
+    private static final byte PROTOCOL_COMMAND = 0x08;
 
     @Override
-    protected void encode(ChannelHandlerContext ctx, DeviceMessage message, List<Object> out) throws Exception {
+    protected void encode(ChannelHandlerContext ctx, DeviceMessage message, ByteBuf out) throws Exception {
         try {
-            final ByteBuf response = encodeGT06Response(ctx, message);
-            if (response != null) {
-                log.debug("Encoded GT06 response: type={} to {}",
-                    message.getType(), ctx.channel().remoteAddress());
-                out.add(response);
+            switch (message.type().toLowerCase()) {
+                case "login_ack" -> encodeLoginResponse(message, out);
+                case "gps_ack" -> encodeGpsResponse(message, out);
+                case "heartbeat_ack" -> encodeHeartbeatResponse(message, out);
+                case "string_ack" -> encodeStringResponse(message, out);
+                case "command" -> encodeCommand(message, out);
+                default -> {
+                    log.warn("⚠️ Unknown message type for encoding: {}", message.type());
+                    encodeGenericResponse(message, out);
+                }
             }
+
+            log.debug("📤 Encoded {} message for device: {}", message.type(), message.imei());
+
         } catch (Exception e) {
-            log.error("Failed to encode GT06 response for message type '{}' to {}: {}",
-                message.getType(), ctx.channel().remoteAddress(), e.getMessage(), e);
+            log.error("❌ Failed to encode message type {} for device {}: {}", 
+                    message.type(), message.imei(), e.getMessage(), e);
+            throw e;
         }
     }
 
     /**
-     * Create GT06 response based on message type
+     * Encode login acknowledgment response.
      */
-    private ByteBuf encodeGT06Response(ChannelHandlerContext ctx, DeviceMessage message) {
-        final String messageType = message.getType().toLowerCase();
-        final int protocolNumber = determineProtocolNumber(messageType);
-        final int serialNumber = extractSerialNumber(message);
-        
-        return createSimpleAckResponse(ctx, protocolNumber, serialNumber);
+    private void encodeLoginResponse(DeviceMessage message, ByteBuf out) {
+        var data = message.data();
+        var serialNumber = getIntValue(data, "serialNumber", 0x0001);
+
+        writeFrame(out, PROTOCOL_LOGIN_RESPONSE, buffer -> {
+            buffer.writeShort(serialNumber);
+        });
     }
 
     /**
-     * Determine protocol number for response based on message type
+     * Encode GPS data acknowledgment response.
      */
-    private int determineProtocolNumber(String messageType) {
-        return switch (messageType) {
-            case "login" -> 0x01;
-            case "gps", "location" -> 0x12;
-            case "heartbeat", "status" -> 0x13;
-            case "alarm" -> 0x16;
-            case "string" -> 0x15;
-            case "gps_address" -> 0x1A;
-            default -> 0x12; // Default to GPS response
-        };
+    private void encodeGpsResponse(DeviceMessage message, ByteBuf out) {
+        var data = message.data();
+        var serialNumber = getIntValue(data, "serialNumber", 0x0002);
+
+        writeFrame(out, PROTOCOL_GPS_RESPONSE, buffer -> {
+            buffer.writeShort(serialNumber);
+        });
     }
 
     /**
-     * Create simple acknowledgment response according to GT06 specification
-     * Format: Start(2) + Length(1) + Protocol(1) + Serial(2) + CRC(2) + Stop(2)
+     * Encode heartbeat acknowledgment response.
      */
-    private ByteBuf createSimpleAckResponse(ChannelHandlerContext ctx, int protocolNumber, int serialNumber) {
-        final ByteBuf response = ctx.alloc().buffer(10);
-        
-        // Start bits (0x78 0x78)
-        response.writeShort(START_BITS);
-        
-        // Packet length = Protocol(1) + Serial(2) + CRC(2) = 5 bytes
-        response.writeByte(0x05);
-        
-        // Protocol number (echo from request)
-        response.writeByte(protocolNumber);
-        
-        // Serial number (echo from request)
-        response.writeShort(serialNumber);
-        
-        // Calculate CRC over packet length + protocol + serial
-        final int crc = calculateCRC(response, 2, 3); // From byte 2, length 3
-        response.writeShort(crc);
-        
-        // Stop bits (0x0D 0x0A)
-        response.writeShort(STOP_BITS);
-        
-        log.debug("Created ACK response: protocol=0x{:02X}, serial={}, crc=0x{:04X}",
-            protocolNumber, serialNumber, crc);
-        
-        return response;
+    private void encodeHeartbeatResponse(DeviceMessage message, ByteBuf out) {
+        var data = message.data();
+        var serialNumber = getIntValue(data, "serialNumber", 0x0003);
+
+        writeFrame(out, PROTOCOL_HEARTBEAT_RESPONSE, buffer -> {
+            buffer.writeShort(serialNumber);
+        });
     }
 
     /**
-     * Calculate CRC-ITU checksum according to GT06 specification
+     * Encode string message acknowledgment.
      */
-    private int calculateCRC(ByteBuf buffer, int offset, int length) {
-        int crc = 0xFFFF; // CRC-ITU initial value
-        final int startPos = buffer.readerIndex() + offset;
-        
-        for (int i = 0; i < length; i++) {
-            final int data = buffer.getUnsignedByte(startPos + i);
-            final int tableIndex = ((crc >> 8) ^ data) & 0xFF;
-            crc = ((crc << 8) ^ getCrcTableValue(tableIndex)) & 0xFFFF;
+    private void encodeStringResponse(DeviceMessage message, ByteBuf out) {
+        var data = message.data();
+        var serialNumber = getIntValue(data, "serialNumber", 0x0004);
+
+        writeFrame(out, PROTOCOL_STRING_RESPONSE, buffer -> {
+            buffer.writeShort(serialNumber);
+        });
+    }
+
+    /**
+     * Encode command message to device.
+     */
+    private void encodeCommand(DeviceMessage message, ByteBuf out) {
+        var data = message.data();
+        var command = getStringValue(data, "command", "");
+        var serialNumber = getIntValue(data, "serialNumber", 0x0001);
+
+        if (command.isEmpty()) {
+            log.warn("⚠️ Empty command for device: {}", message.imei());
+            return;
         }
-        
-        return crc;
+
+        writeFrame(out, PROTOCOL_COMMAND, buffer -> {
+            // Write command string
+            byte[] commandBytes = command.getBytes(StandardCharsets.UTF_8);
+            buffer.writeBytes(commandBytes);
+            buffer.writeShort(serialNumber);
+        });
+
+        log.info("📡 Sent command to device {}: {}", message.imei(), command);
     }
 
     /**
-     * Get CRC table value (simplified for key values, full implementation would use complete table)
+     * Encode generic response.
      */
-    private int getCrcTableValue(int index) {
-        // This is a simplified version - production should use the full 256-entry CRC table
-        if (index < CRC_TABLE.length) {
-            return CRC_TABLE[index];
+    private void encodeGenericResponse(DeviceMessage message, ByteBuf out) {
+        var data = message.data();
+        var serialNumber = getIntValue(data, "serialNumber", 0x0000);
+
+        writeFrame(out, PROTOCOL_LOGIN_RESPONSE, buffer -> {
+            buffer.writeShort(serialNumber);
+        });
+    }
+
+    /**
+     * Write GT06 frame with proper structure and CRC calculation.
+     * Updated to use modern ByteBuf operations (non-deprecated APIs).
+     */
+    private void writeFrame(ByteBuf out, byte protocolNumber, FrameContentWriter contentWriter) {
+        // Create temporary buffer for content to calculate length
+        ByteBuf contentBuffer = out.alloc().buffer();
+
+        try {
+            // Write content to temporary buffer
+            contentWriter.writeContent(contentBuffer);
+
+            int contentLength = contentBuffer.readableBytes();
+            int totalLength = contentLength + 2; // +2 for protocol number and length byte
+
+            // Write start bits
+            out.writeBytes(START_BITS);
+
+            // Write length
+            out.writeByte(totalLength);
+
+            // Write protocol number  
+            out.writeByte(protocolNumber);
+
+            // Write content
+            out.writeBytes(contentBuffer);
+
+            // Calculate and write CRC-16
+            int crc = calculateCRC16(out, 2, totalLength + 1); // Skip start bits, include length+protocol+content
+            out.writeShort(crc);
+
+            // Write end bits
+            out.writeBytes(END_BITS);
+
+        } finally {
+            // Release temporary buffer (proper resource management)
+            contentBuffer.release();
         }
-        // Fallback calculation for missing table entries
-        int result = index << 8;
-        for (int i = 0; i < 8; i++) {
-            if ((result & 0x8000) != 0) {
-                result = (result << 1) ^ 0x1021;
-            } else {
-                result <<= 1;
+    }
+
+    /**
+     * Calculate CRC-16 for GT06 protocol.
+     * Updated implementation using modern ByteBuf methods.
+     */
+    private int calculateCRC16(ByteBuf buffer, int start, int length) {
+        int crc = 0xFFFF;
+        int savedReaderIndex = buffer.readerIndex();
+
+        try {
+            buffer.readerIndex(start);
+
+            for (int i = 0; i < length; i++) {
+                int data = buffer.readUnsignedByte();
+                crc ^= data;
+
+                for (int j = 0; j < 8; j++) {
+                    if ((crc & 0x0001) != 0) {
+                        crc >>= 1;
+                        crc ^= 0xA001;
+                    } else {
+                        crc >>= 1;
+                    }
+                }
             }
-            result &= 0xFFFF;
+
+            return crc;
+
+        } finally {
+            // Restore original reader index
+            buffer.readerIndex(savedReaderIndex);
         }
-        return result;
     }
 
     /**
-     * Extract serial number from device message
+     * Safely get integer value from message data.
      */
-    private int extractSerialNumber(DeviceMessage message) {
-        if (message.getData() != null && message.getData().containsKey("serialNumber")) {
-            final Object serial = message.getData().get("serialNumber");
-            if (serial instanceof Number number) {
-                return number.intValue() & 0xFFFF;
-            }
+    private int getIntValue(java.util.Map<String, Object> data, String key, int defaultValue) {
+        Object value = data.get(key);
+        if (value == null) {
+            return defaultValue;
         }
-        return 0x0001; // Default serial number
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException e) {
+            log.warn("⚠️ Invalid integer value for key '{}': {}", key, value);
+            return defaultValue;
+        }
     }
+
+    /**
+     * Safely get string value from message data.
+     */
+    private String getStringValue(java.util.Map<String, Object> data, String key, String defaultValue) {
+        Object value = data.get(key);
+        return value != null ? value.toString() : defaultValue;
+    }
+
+    /**
+     * Functional interface for writing frame content.
+     */
+    @FunctionalInterface
+    private interface FrameContentWriter {
+        void writeContent(ByteBuf buffer);
+    }
+
+    /**
+     * Create command message for device configuration.
+     */
+    // public static DeviceMessage createConfigurationCommand(String imei, String command) {
+    //     var data = new java.util.HashMap<String, Object>();
+    //     data.put("command", command);
+    //     data.put("serialNumber", System.currentTimeMillis() & 0xFFFF);
+
+    //     return new DeviceMessage(imei, "GT06", "command", java.time.Instant.now(), data);
+    // }
+
+    /**
+     * Create location reporting configuration command.
+     */
+    // public static DeviceMessage createLocationReportingCommand(String imei, int intervalSeconds) {
+    //     String command = String.format("**,imei:%s,C02,%ds", imei, intervalSeconds);
+    //     return createConfigurationCommand(imei, command);
+    // }
+
+    // /**
+    //  * Create device reset command.
+    //  */
+    // public static DeviceMessage createResetCommand(String imei) {
+    //     String command = String.format("**,imei:%s,E00", imei);
+    //     return createConfigurationCommand(imei, command);
+    // }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-        log.error("GT06 protocol encoder error to {}: {}",
-            ctx.channel().remoteAddress(), cause.getMessage(), cause);
+        log.error("❌ GT06 encoder error for {}: {}", 
+                ctx.channel().remoteAddress(), cause.getMessage(), cause);
         super.exceptionCaught(ctx, cause);
     }
 }

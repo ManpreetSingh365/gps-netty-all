@@ -1,467 +1,221 @@
 package com.wheelseye.devicegateway.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.netty.channel.Channel;
-import io.netty.util.AttributeKey;
+import lombok.*;
+import lombok.experimental.Accessors;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
-import java.time.Duration;
+import java.io.Serializable;
 import java.time.Instant;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * DeviceSession - Represents an active device connection session
+ * DeviceSession Model - Redis-Only Implementation
  * 
- * Enhanced for Java 21 and Spring Boot 3.5.5 with:
- * - Modern immutability patterns
- * - Comprehensive session management
- * - Thread-safe operations
- * - Proper JSON serialization support
- * - Builder pattern for flexible construction
- * 
- * @since Spring Boot 3.5.5
+ * Simple POJO for Redis storage without database persistence.
+ * Contains all required methods for DeviceSessionService compatibility.
  */
-public class DeviceSession {
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder(toBuilder = true)
+@Accessors(chain = true)
+public class DeviceSession implements Serializable {
 
-    public static final AttributeKey<DeviceSession> DEVICE_SESSION_KEY = AttributeKey.valueOf("deviceSession");
+    private static final long serialVersionUID = 1L;
 
-    // Session identification
-    private final String id;
-    private final IMEI imei;
-    private final String channelId;
-    private final String remoteAddress;
+    private String id;
+    private String imei;
+    private String channelId;
+    private String remoteAddress;
 
-    // Connection details
-    @JsonIgnore // Don't serialize Netty Channel
-    private volatile Channel channel;
-    private volatile String protocolVersion;
-    private volatile String deviceVariant;
-    private volatile DeviceStatus status;
+    @Builder.Default
+    private boolean authenticated = false;
 
-    // Session state
-    private volatile boolean authenticated;
-    private final Instant createdAt;
-    private volatile Instant lastActivityAt;
-    private volatile Instant lastLoginAt;
+    private Double lastLatitude;
+    private Double lastLongitude;
+    private Instant lastPositionTime;
 
-    // Device location and status
-    private volatile Double lastLatitude;
-    private volatile Double lastLongitude;
-    private volatile Instant lastPositionTime;
-    private volatile String deviceModel;
-    private volatile String firmwareVersion;
+    @Builder.Default
+    private Instant lastActivityAt = Instant.now();
 
-    // Additional attributes (thread-safe)
-    private final Map<String, Object> attributes = new ConcurrentHashMap<>();
+    @Builder.Default
+    private Instant createdAt = Instant.now();
 
-    /**
-     * Constructor for basic session creation (compatible with existing code)
-     */
-    public DeviceSession(String imei, Channel channel) {
-        this(IMEI.of(imei, false), channel);
+    @Builder.Default
+    private SessionStatus status = SessionStatus.ACTIVE;
+
+    // Transient field for Netty channel (not serialized to Redis)
+    @JsonIgnore
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    private transient Channel channel;
+
+    // Factory methods
+    public static DeviceSession create(IMEI imei, Channel channel) {
+        Objects.requireNonNull(imei, "IMEI cannot be null");
+        Objects.requireNonNull(channel, "Channel cannot be null");
+
+        return DeviceSession.builder()
+                .id(generateSessionId())
+                .imei(imei.value())
+                .channelId(channel.id().asShortText())
+                .remoteAddress(extractRemoteAddress(channel))
+                .channel(channel)
+                .authenticated(false)
+                .lastActivityAt(Instant.now())
+                .createdAt(Instant.now())
+                .status(SessionStatus.ACTIVE)
+                .build();
     }
 
-    /**
-     * Constructor with IMEI object
-     */
-    public DeviceSession(IMEI imei, Channel channel) {
-        this.id = UUID.randomUUID().toString();
-        this.imei = Objects.requireNonNull(imei, "IMEI cannot be null");
-        this.channel = Objects.requireNonNull(channel, "Channel cannot be null");
-        this.channelId = channel.id().asShortText();
-        this.remoteAddress = extractRemoteAddress(channel);
-
-        final Instant now = Instant.now();
-        this.createdAt = now;
-        this.lastActivityAt = now;
-        this.lastLoginAt = now;
-        this.authenticated = false;
-        this.status = DeviceStatus.CONNECTED;
-    }
-
-    /**
-     * Full constructor for Redis deserialization
-     */
-    public DeviceSession(
-            String id,
-            IMEI imei,
-            String channelId,
-            String remoteAddress,
-            Channel channel,
-            String protocolVersion,
-            String deviceVariant,
-            DeviceStatus status,
-            boolean authenticated,
-            Instant createdAt,
-            Instant lastActivityAt,
-            Instant lastLoginAt,
-            Map<String, Object> attributes) {
-
-        this.id = Objects.requireNonNullElse(id, UUID.randomUUID().toString());
-        this.imei = Objects.requireNonNull(imei, "IMEI cannot be null");
-        this.channelId = Objects.requireNonNullElse(channelId, "unknown");
-        this.remoteAddress = Objects.requireNonNullElse(remoteAddress, "unknown");
-        this.channel = channel;
-        this.protocolVersion = protocolVersion;
-        this.deviceVariant = deviceVariant;
-        this.status = Objects.requireNonNullElse(status, DeviceStatus.CONNECTED);
-        this.authenticated = authenticated;
-        this.createdAt = Objects.requireNonNullElse(createdAt, Instant.now());
-        this.lastActivityAt = Objects.requireNonNullElse(lastActivityAt, this.createdAt);
-        this.lastLoginAt = Objects.requireNonNullElse(lastLoginAt, this.createdAt);
-
-        if (attributes != null) {
-            this.attributes.putAll(attributes);
-        }
-    }
-
-    /**
-     * Factory method for creating sessions (used by DeviceSessionService)
-     */
     public static DeviceSession create(IMEI imei, String channelId, String remoteAddress) {
-        final String sessionId = UUID.randomUUID().toString();
-        final Instant now = Instant.now();
+        Objects.requireNonNull(imei, "IMEI cannot be null");
+        Objects.requireNonNull(channelId, "Channel ID cannot be null");
+        Objects.requireNonNull(remoteAddress, "Remote address cannot be null");
 
-        return new DeviceSession(
-                sessionId,
-                imei,
-                channelId,
-                remoteAddress,
-                null, // channel will be set later
-                null, // protocolVersion
-                null, // deviceVariant
-                DeviceStatus.CONNECTED,
-                false, // authenticated
-                now, // createdAt
-                now, // lastActivityAt
-                now, // lastLoginAt
-                new ConcurrentHashMap<>());
+        return DeviceSession.builder()
+                .id(generateSessionId())
+                .imei(imei.value())
+                .channelId(channelId)
+                .remoteAddress(remoteAddress)
+                .authenticated(false)
+                .lastActivityAt(Instant.now())
+                .createdAt(Instant.now())
+                .status(SessionStatus.ACTIVE)
+                .build();
     }
 
-    // Getters
-    public String getId() {
-        return id;
-    }
+    // Required service methods
 
-    public IMEI getImei() {
-        return imei;
-    }
-
-    public String getChannelId() {
-        return channelId;
-    }
-
-    public String getRemoteAddress() {
-        return remoteAddress;
-    }
-
-    public Channel getChannel() {
-        return channel;
-    }
-
-    public String getProtocolVersion() {
-        return protocolVersion;
-    }
-
-    public String getDeviceVariant() {
-        return deviceVariant;
-    }
-
-    public DeviceStatus getStatus() {
-        return status;
-    }
-
-    public boolean isAuthenticated() {
-        return authenticated;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getLastActivityAt() {
-        return lastActivityAt;
-    }
-
-    public Instant getLastLoginAt() {
-        return lastLoginAt;
-    }
-
-    public Double getLastLatitude() {
-        return lastLatitude;
-    }
-
-    public Double getLastLongitude() {
-        return lastLongitude;
-    }
-
-    public Instant getLastPositionTime() {
-        return lastPositionTime;
-    }
-
-    public String getDeviceModel() {
-        return deviceModel;
-    }
-
-    public String getFirmwareVersion() {
-        return firmwareVersion;
-    }
-
-    public Map<String, Object> getAttributes() {
-        return Map.copyOf(attributes);
-    }
-
-    // Setters with activity tracking
-    public void setChannel(Channel channel) {
-        this.channel = channel;
-        touch();
-    }
-
-    public void setChannel(String channelId, String remoteAddress) {
-        // For cases where we only have string information
-        touch();
-    }
-
-    public void setProtocolVersion(String protocolVersion) {
-        this.protocolVersion = protocolVersion;
-        touch();
-    }
-
-    public void setDeviceVariant(String deviceVariant) {
-        this.deviceVariant = deviceVariant;
-        touch();
-    }
-
-    public void setStatus(DeviceStatus status) {
-        this.status = status;
-        touch();
-    }
-
-    public void setAuthenticated(boolean authenticated) {
-        this.authenticated = authenticated;
-        if (authenticated) {
-            this.lastLoginAt = Instant.now();
-        }
-        touch();
-    }
-
-    public void setLastLatitude(Double lastLatitude) {
-        this.lastLatitude = lastLatitude;
-        touch();
-    }
-
-    public void setLastLongitude(Double lastLongitude) {
-        this.lastLongitude = lastLongitude;
-        touch();
-    }
-
-    public void setLastPositionTime(Instant lastPositionTime) {
-        this.lastPositionTime = lastPositionTime;
-        touch();
-    }
-
-    public void setDeviceModel(String deviceModel) {
-        this.deviceModel = deviceModel;
-        touch();
-    }
-
-    public void setFirmwareVersion(String firmwareVersion) {
-        this.firmwareVersion = firmwareVersion;
-        touch();
-    }
-
-    public void setLastHeartbeat(Instant lastHeartbeat) {
-        touch();
-    }
-
-    public void setLastMessage(Instant lastMessage) {
-        touch();
-    }
-
-    // Compatibility methods for existing code
-    public Instant getLoginTime() {
-        return createdAt;
-    }
-
-    public Instant getLastHeartbeat() {
-        return lastActivityAt;
-    }
-
-    public Instant getLastMessage() {
-        return lastActivityAt;
+    /**
+     * Update last activity timestamp
+     */
+    public DeviceSession touch() {
+        this.lastActivityAt = Instant.now();
+        return this;
     }
 
     /**
-     * Update device position with timestamp
+     * Set the transient channel reference
      */
-    public void updatePosition(double latitude, double longitude, Instant timestamp) {
+    public DeviceSession setChannel(Channel channel) {
+        this.channel = channel;
+        if (channel != null) {
+            this.channelId = channel.id().asShortText();
+            this.remoteAddress = extractRemoteAddress(channel);
+        }
+        return this;
+    }
+
+    /**
+     * Update GPS coordinates
+     */
+    public DeviceSession setLastLatitude(double latitude) {
+        this.lastLatitude = latitude;
+        return this;
+    }
+
+    public DeviceSession setLastLongitude(double longitude) {
+        this.lastLongitude = longitude;
+        return this;
+    }
+
+    public DeviceSession setLastPositionTime(Instant timestamp) {
+        this.lastPositionTime = timestamp;
+        return this;
+    }
+
+    /**
+     * Update position with all coordinates at once
+     */
+    public DeviceSession updatePosition(double latitude, double longitude, Instant timestamp) {
         this.lastLatitude = latitude;
         this.lastLongitude = longitude;
         this.lastPositionTime = timestamp;
         touch();
+        return this;
     }
 
     /**
-     * Update activity timestamp
+     * Set authentication status
      */
-    public void touch() {
-        this.lastActivityAt = Instant.now();
+    public DeviceSession setAuthenticated(boolean authenticated) {
+        this.authenticated = authenticated;
+        return this;
     }
 
     /**
-     * Check if session is active based on timeout
+     * Check if session is authenticated
      */
-    public boolean isActive(Duration timeout) {
-        return Duration.between(lastActivityAt, Instant.now()).compareTo(timeout) < 0;
-    }
-
-    public boolean isActive(long timeoutMillis) {
-        return isActive(Duration.ofMillis(timeoutMillis));
+    public boolean isAuthenticated() {
+        return authenticated;
     }
 
     /**
-     * Get or create attribute
+     * Check if channel is active
      */
-    @SuppressWarnings("unchecked")
-    public <T> T getAttribute(String key, T defaultValue) {
-        return (T) attributes.getOrDefault(key, defaultValue);
+    public boolean isChannelActive() {
+        return channel != null && channel.isActive();
     }
 
     /**
-     * Set attribute
+     * Check if session is idle
      */
-    public void setAttribute(String key, Object value) {
-        if (value != null) {
-            attributes.put(key, value);
-        } else {
-            attributes.remove(key);
+    public boolean isIdle(long maxIdleSeconds) {
+        if (lastActivityAt == null) return true;
+        return Instant.now().getEpochSecond() - lastActivityAt.getEpochSecond() > maxIdleSeconds;
+    }
+
+    /**
+     * Get session duration in seconds
+     */
+    public long getSessionDurationSeconds() {
+        if (createdAt == null) return 0;
+        return Instant.now().getEpochSecond() - createdAt.getEpochSecond();
+    }
+
+    /**
+     * Check if session has valid location data
+     */
+    public boolean hasValidLocation() {
+        return lastLatitude != null && lastLongitude != null &&
+               lastLatitude >= -90.0 && lastLatitude <= 90.0 &&
+               lastLongitude >= -180.0 && lastLongitude <= 180.0;
+    }
+
+    /**
+     * Get IMEI as IMEI object
+     */
+    public IMEI getImeiObject() {
+        return IMEI.of(imei, false);
+    }
+
+    // Helper methods
+    private static String generateSessionId() {
+        return "session_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+    }
+
+    private static String extractRemoteAddress(Channel channel) {
+        if (channel == null || channel.remoteAddress() == null) {
+            return "UNKNOWN";
         }
-        touch();
+        return channel.remoteAddress().toString();
     }
 
-    /**
-     * Remove attribute
-     */
-    public void removeAttribute(String key) {
-        attributes.remove(key);
-        touch();
-    }
-
-    private String extractRemoteAddress(Channel channel) {
-        return channel != null && channel.remoteAddress() != null
-                ? channel.remoteAddress().toString()
-                : "unknown";
-    }
-
-    @Override
-    public boolean equals(Object obj) {
-        return obj instanceof DeviceSession other && Objects.equals(this.id, other.id);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(id);
+    // Session status enum
+    public enum SessionStatus {
+        ACTIVE, INACTIVE, DISCONNECTED, EXPIRED, ERROR
     }
 
     @Override
     public String toString() {
-        return String.format(
-                "DeviceSession{id='%s', imei=%s, channel='%s', remoteAddress='%s', authenticated=%s, status=%s}",
-                id, imei.masked(), channelId, remoteAddress, authenticated, status);
-    }
-
-    // Add this to DeviceSession.java
-    public static class Builder {
-        private String id;
-        private IMEI imei;
-        private String channelId;
-        private String remoteAddress;
-        private Channel channel;
-        private boolean authenticated;
-        private Instant createdAt;
-        private Instant lastActivityAt;
-        private Double lastLatitude;
-        private Double lastLongitude;
-        private Map<String, Object> attributes = new ConcurrentHashMap<>();
-
-        public Builder id(String id) {
-            this.id = id;
-            return this;
-        }
-
-        public Builder imei(IMEI imei) {
-            this.imei = imei;
-            return this;
-        }
-
-        public Builder channelId(String channelId) {
-            this.channelId = channelId;
-            return this;
-        }
-
-        public Builder remoteAddress(String remoteAddress) {
-            this.remoteAddress = remoteAddress;
-            return this;
-        }
-
-        public Builder channel(Channel channel) {
-            this.channel = channel;
-            return this;
-        }
-
-        public Builder authenticated(boolean authenticated) {
-            this.authenticated = authenticated;
-            return this;
-        }
-
-        public Builder createdAt(Instant createdAt) {
-            this.createdAt = createdAt;
-            return this;
-        }
-
-        public Builder lastActivityAt(Instant lastActivityAt) {
-            this.lastActivityAt = lastActivityAt;
-            return this;
-        }
-
-        public Builder attributes(Map<String, Object> attributes) {
-            if (attributes != null)
-                this.attributes.putAll(attributes);
-            return this;
-        }
-
-        public DeviceSession build() {
-            return new DeviceSession(
-                    Objects.requireNonNullElse(id, UUID.randomUUID().toString()),
-                    imei,
-                    Objects.requireNonNullElse(channelId, "unknown"),
-                    Objects.requireNonNullElse(remoteAddress, "unknown"),
-                    channel,
-                    null, null,
-                    DeviceStatus.CONNECTED,
-                    authenticated,
-                    Objects.requireNonNullElse(createdAt, Instant.now()),
-                    Objects.requireNonNullElse(lastActivityAt, Instant.now()),
-                    Objects.requireNonNullElse(lastActivityAt, Instant.now()),
-                    attributes);
-        }
-    }
-
-    public static Builder builder() {
-        return new Builder();
-    }
-
-    /**
-     * Device status enumeration
-     */
-    public enum DeviceStatus {
-        CONNECTED,
-        AUTHENTICATED,
-        ACTIVE,
-        IDLE,
-        DISCONNECTED,
-        ERROR
+        return String.format("DeviceSession{id='%s', imei='%s', authenticated=%s, active=%s, duration=%ds}",
+                id, 
+                imei != null ? "*".repeat(11) + imei.substring(Math.max(0, imei.length() - 4)) : "null",
+                authenticated, 
+                isChannelActive(), 
+                getSessionDurationSeconds());
     }
 }

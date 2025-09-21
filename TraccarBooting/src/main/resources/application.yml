@@ -2,6 +2,7 @@ server:
   port: ${SERVER_PORT:8081}
   address: 0.0.0.0
 
+# Device Gateway Service - Kafka + Redis Configuration
 spring:
   application:
     name: device-gateway-service
@@ -27,11 +28,33 @@ spring:
     listener:
       ack-mode: MANUAL_IMMEDIATE
 
+  # Redis Configuration (primary storage)
   data:
     redis:
       host: ${REDIS_HOST:redis}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+      timeout: 2000ms
+      database: 0
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: 2000ms
+
+  # Cache Configuration
+  cache:
+    type: redis
+    redis:
+      time-to-live: 300000  # 5 minutes
+      cache-null-values: false
+    cache-names:
+      - device-sessions
+      - session-stats
+      - session-by-imei
+
+
 
 device-gateway:
   tcp:
@@ -54,20 +77,29 @@ device-gateway:
     idle-timeout-seconds: ${SESSION_IDLE_TIMEOUT_SECONDS:1800}
     max-sessions: ${MAX_SESSIONS:10000}
 
+
+# Logging Configuration
 logging:
   level:
-    com.wheelseye.devicegateway: ${LOG_LEVEL:INFO}
-    org.springframework.kafka: INFO
-    org.springframework.data.redis: WARN
-    io.netty: ${NETTY_LOG_LEVEL:WARN}
+    com.wheelseye.devicegateway: INFO
+    com.wheelseye.devicegateway.protocol: DEBUG
+    com.wheelseye.devicegateway.service: DEBUG
+    com.wheelseye.devicegateway.repository: DEBUG
+    org.springframework.cache: DEBUG
+    org.springframework.data.redis: DEBUG
+    root: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/device-gateway.log
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,caches,sessions,redis
   endpoint:
     health:
       show-details: always
+    redis:
+      enabled: true

@@ -90,7 +90,7 @@ public class DeviceController {
 
         try {
             IMEI deviceImei = IMEI.of(imei);
-            Optional<DeviceSession> session = deviceSessionService.getSession(deviceImei);
+            Optional<DeviceSession> session = deviceSessionService.getSessionByImei(deviceImei);
 
             return session
                 .map(s -> modelMapper.map(s, DeviceSessionDto.class))
@@ -106,33 +106,33 @@ public class DeviceController {
         }
     }
 
-    @GetMapping("/health")
-    @Operation(summary = "Get service health", description = "Returns service health status and metrics")
-    public ResponseEntity<ServiceHealth> getHealth() {
-        try {
-            var stats = deviceSessionService.getSessionStats();
-            var health = new ServiceHealth(
-                "UP",
-                stats.totalSessions(),
-                stats.authenticatedSessions(),
-                stats.unauthenticatedSessions(),
-                Instant.now()
-            );
+    // @GetMapping("/health")
+    // @Operation(summary = "Get service health", description = "Returns service health status and metrics")
+    // public ResponseEntity<ServiceHealth> getHealth() {
+    //     try {
+    //         var stats = deviceSessionService.getSessionStats();
+    //         var health = new ServiceHealth(
+    //             "UP",
+    //             stats.getTotalSessions(),
+    //             stats.getAuthenticatedSessions(),
+    //             stats.getUnauthenticatedSessions(),
+    //             Instant.now()
+    //         );
 
-            return ResponseEntity.ok(health);
+    //         return ResponseEntity.ok(health);
 
-        } catch (Exception e) {
-            logger.error("Health check failed", e);
-            var errorHealth = new ServiceHealth(
-                "DOWN",
-                0,
-                0,
-                0,
-                Instant.now()
-            );
-            return ResponseEntity.internalServerError().body(errorHealth);
-        }
-    }
+    //     } catch (Exception e) {
+    //         logger.error("Health check failed", e);
+    //         var errorHealth = new ServiceHealth(
+    //             "DOWN",
+    //             0,
+    //             0,
+    //             0,
+    //             Instant.now()
+    //         );
+    //         return ResponseEntity.internalServerError().body(errorHealth);
+    //     }
+    // }
 
     // @GetMapping("/stats")
     // @Operation(summary = "Get detailed session statistics")
