@@ -9,7 +9,6 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import java.io.Serializable;
@@ -119,13 +118,13 @@ public class DeviceSession implements Serializable {
     /**
      * Create new device session with IMEI object and channel
      */
-    public static DeviceSession create(@NonNull IMEI imei, @NonNull Channel channel) {
+    public static DeviceSession create(@NonNull String imei, @NonNull Channel channel) {
         Objects.requireNonNull(imei, "IMEI cannot be null");
         Objects.requireNonNull(channel, "Channel cannot be null");
 
         return DeviceSession.builder()
                 .id(generateSessionId())
-                .imei(imei.value())
+                .imei(imei)
                 .channelId(channel.id().asShortText())
                 .remoteAddress(extractRemoteAddress(channel))
                 .channel(channel)
@@ -139,14 +138,14 @@ public class DeviceSession implements Serializable {
     /**
      * Create new device session with string parameters (for Redis deserialization)
      */
-    public static DeviceSession create(@NonNull IMEI imei, @NonNull String channelId, @NonNull String remoteAddress) {
+    public static DeviceSession create(@NonNull String imei, @NonNull String channelId, @NonNull String remoteAddress) {
         Objects.requireNonNull(imei, "IMEI cannot be null");
         Objects.requireNonNull(channelId, "Channel ID cannot be null");
         Objects.requireNonNull(remoteAddress, "Remote address cannot be null");
 
         return DeviceSession.builder()
                 .id(generateSessionId())
-                .imei(imei.value())
+                .imei(imei)
                 .channelId(channelId)
                 .remoteAddress(remoteAddress)
                 .authenticated(false)
@@ -263,20 +262,6 @@ public class DeviceSession implements Serializable {
         return lastLatitude != null && lastLongitude != null &&
                lastLatitude >= -90.0 && lastLatitude <= 90.0 &&
                lastLongitude >= -180.0 && lastLongitude <= 180.0;
-    }
-
-    /**
-     * Get IMEI as IMEI object
-     */
-    public IMEI getImeiObject() {
-        return IMEI.of(imei, false); // Skip validation for existing data
-    }
-
-    /**
-     * Get masked IMEI for logging
-     */
-    public String getMaskedImei() {
-        return getImeiObject().masked();
     }
 
     /**

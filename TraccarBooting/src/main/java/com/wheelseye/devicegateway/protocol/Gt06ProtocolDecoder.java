@@ -98,7 +98,7 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
         data.put("loginImei", imei);
         data.put("loginTime", Instant.now());
 
-        log.info("🔐 Device login: IMEI={} from {}", maskImei(imei), ctx.channel().remoteAddress());
+        log.info("🔐 Device login: IMEI={} from {}", imei, ctx.channel().remoteAddress());
 
         return DeviceMessage.builder()
                 .imei(imei)
@@ -148,9 +148,15 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
         if ("alarm".equals(messageType) && content.readableBytes() >= 5) {
             parseStatusInfo(content, data);
         }
-
-        log.info("📍 Location: {} -> [{:.6f}, {:.6f}] speed={}km/h sats={}", 
-                maskImei(imei), latitude, longitude, speedRaw, satelliteCount);
+        
+        log.info(
+            "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
+            imei,
+            String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
+            String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
+            speedRaw, satelliteCount,
+            latitude, longitude
+        );
 
         return DeviceMessage.builder()
                 .imei(imei)
@@ -168,7 +174,7 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
             parseStatusInfo(content, data);
         }
 
-        log.debug("💓 Heartbeat from: {}", maskImei(imei));
+        log.debug("💓 Heartbeat from: {}", imei);
 
         return DeviceMessage.builder()
                 .imei(imei)
@@ -217,7 +223,7 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
         }
 
         data.put("protocolNumber", String.format("0x%02X", protocolNumber));
-        log.warn("❓ Unknown protocol: 0x{:02X} from {}", protocolNumber, maskImei(imei));
+        log.warn("❓ Unknown protocol: 0x{:02X} from {}", protocolNumber, imei);
 
         return DeviceMessage.builder()
                 .imei(imei)
@@ -291,10 +297,10 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
         data.put("language", (alarmLanguage & 0xFF) == 1 ? "Chinese" : "English");
     }
 
-    private String maskImei(String imei) {
-        return imei != null && imei.length() >= 4 ? 
-               "*".repeat(11) + imei.substring(11) : "****";
-    }
+    // private String maskImei(String imei) {
+    //     return imei != null && imei.length() >= 4 ? 
+    //            "*".repeat(11) + imei.substring(11) : "****";
+    // }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {

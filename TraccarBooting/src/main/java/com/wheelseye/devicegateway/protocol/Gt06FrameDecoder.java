@@ -5,7 +5,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import org.springframework.stereotype.Component;
+import org.springframework.context.annotation.Scope;
 import java.util.List;
 
 /**
@@ -30,6 +31,10 @@ import java.util.List;
                                                       └──┴─ CRC (2 bytes) 
  * Length = Protocol Number + Information Content + Serial Number + Error Check (excludes start bits and length itself)
  */
+
+@Component
+@Scope("prototype")  
+// Each channel must get a new instance | ByteToMessageDecoder maintains internal buffer state, so it is not sharable across multiple channels.
 public class Gt06FrameDecoder extends ByteToMessageDecoder {
 
     private static final Logger logger = LoggerFactory.getLogger(Gt06FrameDecoder.class);

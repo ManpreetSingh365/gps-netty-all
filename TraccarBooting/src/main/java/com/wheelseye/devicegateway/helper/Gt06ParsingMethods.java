@@ -4,7 +4,7 @@ import com.wheelseye.devicegateway.dto.AlarmStatusDto;
 import com.wheelseye.devicegateway.dto.DeviceExtendedFeatureDto;
 import com.wheelseye.devicegateway.dto.DeviceIOPortsDto;
 import com.wheelseye.devicegateway.dto.DeviceLbsDataDto;
-import com.wheelseye.devicegateway.model.MessageFrame;
+// import com.wheelseye.devicegateway.model.MessageFrame;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -216,82 +216,82 @@ public class Gt06ParsingMethods {
     }
 
     // ------------------------------------------------
-    private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String imei, String remoteAddress,
-            MessageFrame frame) {
-        try {
-            content.resetReaderIndex();
-            String fullRawPacket = ByteBufUtil.hexDump(content);
-            String serverTimestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "Z";
-            int frameLen = content.readableBytes();
+    // private void logDeviceReport(ChannelHandlerContext ctx, ByteBuf content, String imei, String remoteAddress,
+    //         MessageFrame frame) {
+    //     try {
+    //         content.resetReaderIndex();
+    //         String fullRawPacket = ByteBufUtil.hexDump(content);
+    //         String serverTimestamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "Z";
+    //         int frameLen = content.readableBytes();
 
-            // Parse all data sections
-            DeviceLbsDataDto lbs = parseLBSData(content);
-            AlarmStatusDto alarmData = parseAlarms(content);
-            DeviceExtendedFeatureDto featureData = parseExtendedFeatures(content);
+    //         // Parse all data sections
+    //         DeviceLbsDataDto lbs = parseLBSData(content);
+    //         AlarmStatusDto alarmData = parseAlarms(content);
+    //         DeviceExtendedFeatureDto featureData = parseExtendedFeatures(content);
 
-            logger.info("📡 Device Report Log ===========================================>");
-            // 🕒 TIMESTAMP SECTION -------------------->
-            logger.info("🕒 Timestamp -------------------->");
-            logger.info("   📩 Server Time : {}", serverTimestamp);
-            logger.info("   📡 RemoteAddress : {}", remoteAddress);
-            logger.info("   📡 IMEI        : {}", imei);
-            logger.info("   📦 Protocol      : 0x{} ({})", String.format("%02X", frame.protocolNumber()),
-                    protocolName(frame.protocolNumber()));
-            logger.info("   🔑 Raw Packet    : {}", fullRawPacket);
-            logger.info("   📏 FrameLen      : {}   | Checksum : ✅ OK  | Duration : {}ms ", frameLen,
-                    System.currentTimeMillis() % 100);
+    //         logger.info("📡 Device Report Log ===========================================>");
+    //         // 🕒 TIMESTAMP SECTION -------------------->
+    //         logger.info("🕒 Timestamp -------------------->");
+    //         logger.info("   📩 Server Time : {}", serverTimestamp);
+    //         logger.info("   📡 RemoteAddress : {}", remoteAddress);
+    //         logger.info("   📡 IMEI        : {}", imei);
+    //         logger.info("   📦 Protocol      : 0x{} ({})", String.format("%02X", frame.protocolNumber()),
+    //                 protocolName(frame.protocolNumber()));
+    //         logger.info("   🔑 Raw Packet    : {}", fullRawPacket);
+    //         logger.info("   📏 FrameLen      : {}   | Checksum : ✅ OK  | Duration : {}ms ", frameLen,
+    //                 System.currentTimeMillis() % 100);
 
-            // 🔌 Device I/O Ports -------------------->
-            logger.info(" 🔌 Device I/O Ports -------------------->");
-            // logger.info(" 🗃️ I/O Hex : {}", ioData.ioHex());
-            // logger.info(" 🔑 IN1 / Ignition : {}", ioData.ignition() ? "ON ✅" : "OFF ❌");
-            // logger.info(" 🛰️ Motion : {}", ioData.motion());
-            // logger.info(" 🔌 IN2 : {}", ioData.input2());
-            // logger.info(" 🔌 OUT1 (Relay) : {}", ioData.out1());
-            // logger.info(" 🔌 OUT2 (Relay) : {}", ioData.out2());
-            // logger.info(" ⚡ ADC1 Voltage : {} V",
-            // ioData.adc1Voltage() != null ? String.format("%.2f", ioData.adc1Voltage()) :
-            // "N/A");
-            // logger.info(" ⚡ ADC2 Voltage : {} V",
-            // ioData.adc2Voltage() != null ? String.format("%.2f", ioData.adc2Voltage()) :
-            // "N/A");
+    //         // 🔌 Device I/O Ports -------------------->
+    //         logger.info(" 🔌 Device I/O Ports -------------------->");
+    //         // logger.info(" 🗃️ I/O Hex : {}", ioData.ioHex());
+    //         // logger.info(" 🔑 IN1 / Ignition : {}", ioData.ignition() ? "ON ✅" : "OFF ❌");
+    //         // logger.info(" 🛰️ Motion : {}", ioData.motion());
+    //         // logger.info(" 🔌 IN2 : {}", ioData.input2());
+    //         // logger.info(" 🔌 OUT1 (Relay) : {}", ioData.out1());
+    //         // logger.info(" 🔌 OUT2 (Relay) : {}", ioData.out2());
+    //         // logger.info(" ⚡ ADC1 Voltage : {} V",
+    //         // ioData.adc1Voltage() != null ? String.format("%.2f", ioData.adc1Voltage()) :
+    //         // "N/A");
+    //         // logger.info(" ⚡ ADC2 Voltage : {} V",
+    //         // ioData.adc2Voltage() != null ? String.format("%.2f", ioData.adc2Voltage()) :
+    //         // "N/A");
 
-            // 📡 LBS Data -------------------->
-            logger.info("📡 LBS Data -------------------->");
-            logger.info("   🗃️ Raw Hex    : {}", lbs.lbsHex());
-            logger.info("   🌐 MCC        : {}", lbs.mcc());
-            logger.info("   📶 MNC        : {}", lbs.mnc());
-            logger.info("   🗼 LAC        : {}", lbs.lac());
-            logger.info("   🗼 CID        : {}", lbs.cid());
-            logger.info("   📡 RSSI       : {} dBm", lbs.rssi());
+    //         // 📡 LBS Data -------------------->
+    //         logger.info("📡 LBS Data -------------------->");
+    //         logger.info("   🗃️ Raw Hex    : {}", lbs.lbsHex());
+    //         logger.info("   🌐 MCC        : {}", lbs.mcc());
+    //         logger.info("   📶 MNC        : {}", lbs.mnc());
+    //         logger.info("   🗼 LAC        : {}", lbs.lac());
+    //         logger.info("   🗼 CID        : {}", lbs.cid());
+    //         logger.info("   📡 RSSI       : {} dBm", lbs.rssi());
 
-            // 🚨 Alarm Data -------------------->
-            logger.info("🚨 GT06 Alarm Data -------------------->");
-            logger.info("   🗃️ Raw Hex          : 0x{}", alarmData.alarmHex());
-            logger.info("   🆘 SOS Alarm        : {}", alarmData.sosAlarm() ? "TRIGGERED" : "OFF");
-            logger.info("   💥 Vibration Alarm  : {}", alarmData.vibrationAlarm() ? "TRIGGERED" : "OFF");
-            logger.info("   🛠️ Tamper Alarm     : {}", alarmData.tamperAlarm() ? "TRIGGERED" : "OFF");
-            logger.info("   🔋 Low Battery      : {}", alarmData.lowBatteryAlarm() ? "TRIGGERED" : "OK");
-            logger.info("   ⚡ Over-speed Alarm : {}", alarmData.overSpeedAlarm() ? "YES" : "NO");
-            logger.info("   🅿️ Idle Alarm       : {}", alarmData.idleAlarm() ? "ACTIVE" : "OFF");
+    //         // 🚨 Alarm Data -------------------->
+    //         logger.info("🚨 GT06 Alarm Data -------------------->");
+    //         logger.info("   🗃️ Raw Hex          : 0x{}", alarmData.alarmHex());
+    //         logger.info("   🆘 SOS Alarm        : {}", alarmData.sosAlarm() ? "TRIGGERED" : "OFF");
+    //         logger.info("   💥 Vibration Alarm  : {}", alarmData.vibrationAlarm() ? "TRIGGERED" : "OFF");
+    //         logger.info("   🛠️ Tamper Alarm     : {}", alarmData.tamperAlarm() ? "TRIGGERED" : "OFF");
+    //         logger.info("   🔋 Low Battery      : {}", alarmData.lowBatteryAlarm() ? "TRIGGERED" : "OK");
+    //         logger.info("   ⚡ Over-speed Alarm : {}", alarmData.overSpeedAlarm() ? "YES" : "NO");
+    //         logger.info("   🅿️ Idle Alarm       : {}", alarmData.idleAlarm() ? "ACTIVE" : "OFF");
 
-            // ⚙️ GT06 Extended Features -------------------->
-            logger.info("⚙️ GT06 Extended Features -------------------->");
-            logger.info("   🗃️ Raw Hex            : 0x{}", featureData.featureHex());
-            logger.info("   📩 SMS Commands       : {}", featureData.smsCommands() ? "SUPPORTED" : "NOT SUPPORTED");
-            logger.info("   😴 Sleep Mode         : {}", featureData.sleepMode() ? "ACTIVE" : "OFF");
-            logger.info("   ⏱️ Upload Interval    : {} sec", featureData.uploadInterval());
-            logger.info("   📏 Distance Upload    : {} meters", featureData.distanceUpload());
-            logger.info("   ❤️ Heartbeat Interval : {} sec", featureData.heartbeatInterval());
-            logger.info("   📶 Cell Scan Count    : {}", featureData.cellScanCount());
-            logger.info("   📨 Backup Mode        : {}", featureData.backupMode());
+    //         // ⚙️ GT06 Extended Features -------------------->
+    //         logger.info("⚙️ GT06 Extended Features -------------------->");
+    //         logger.info("   🗃️ Raw Hex            : 0x{}", featureData.featureHex());
+    //         logger.info("   📩 SMS Commands       : {}", featureData.smsCommands() ? "SUPPORTED" : "NOT SUPPORTED");
+    //         logger.info("   😴 Sleep Mode         : {}", featureData.sleepMode() ? "ACTIVE" : "OFF");
+    //         logger.info("   ⏱️ Upload Interval    : {} sec", featureData.uploadInterval());
+    //         logger.info("   📏 Distance Upload    : {} meters", featureData.distanceUpload());
+    //         logger.info("   ❤️ Heartbeat Interval : {} sec", featureData.heartbeatInterval());
+    //         logger.info("   📶 Cell Scan Count    : {}", featureData.cellScanCount());
+    //         logger.info("   📨 Backup Mode        : {}", featureData.backupMode());
 
-            logger.info("📡 Device Report Log <=========================================== END");
+    //         logger.info("📡 Device Report Log <=========================================== END");
 
-        } catch (Exception e) {
-            logger.error("💥 Enhanced GT06 parsing error for IMEI {}: {}", imei, e.getMessage(), e);
-        }
-    }
+    //     } catch (Exception e) {
+    //         logger.error("💥 Enhanced GT06 parsing error for IMEI {}: {}", imei, e.getMessage(), e);
+    //     }
+    // }
 
     /**
      * Map GT06 protocol number → human-readable name.

@@ -1,7 +1,7 @@
 package com.wheelseye.devicegateway.handler;
 
 import com.wheelseye.devicegateway.model.DeviceMessage;
-import com.wheelseye.devicegateway.model.IMEI;
+// import com.wheelseye.devicegateway.model.IMEI;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -65,12 +65,12 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
 
     private void handleLogin(ChannelHandlerContext ctx, DeviceMessage message) {
         try {
-            var imei = IMEI.of(message.imei());
+            // var imei = IMEI.of(message.imei());
 
             log.info("🔐 Processing login for device: {} from {}", 
-                    imei.masked(), ctx.channel().remoteAddress());
+                    message.imei(), ctx.channel().remoteAddress());
 
-            var session = sessionService.createOrUpdateSession(imei, ctx.channel());
+            var session = sessionService.createOrUpdateSession(message.imei(), ctx.channel());
 
             ctx.channel().attr(IMEI_ATTR).set(message.imei());
             ctx.channel().attr(SESSION_ID_ATTR).set(session.getId());
@@ -78,7 +78,7 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             sendLoginAck(ctx);
             configureDevice(ctx, message.imei());
 
-            log.info("✅ Device {} logged in, session: {}", imei.masked(), session.getId());
+            log.info("✅ Device {} logged in, session: {}", message.imei(), session.getId());
 
         } catch (Exception e) {
             log.error("❌ Login failed for {} from {}: {}", 
@@ -95,21 +95,25 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             // FIXED: Use Optional-based safe extraction
             var latitude = message.latitude().orElse(null);
             var longitude = message.longitude().orElse(null);
-            var timestamp = message.getData("gpsTimestamp", Instant.class)
-                    .orElse(Instant.now());
+            var timestamp = message.getData("gpsTimestamp", Instant.class).orElse(Instant.now());
             var speed = message.speed().orElse(0);     // FIXED: Safe integer extraction
             var course = message.course().orElse(0);   // FIXED: Safe integer extraction
 
             if (latitude != null && longitude != null) {
                 sessionService.updateLastPosition(message.imei(), latitude, longitude, timestamp);
 
-                var imei = IMEI.of(message.imei());
-                log.info("📍 Location: {} -> [{:.6f}, {:.6f}] speed={}km/h course={}°", 
-                        imei.masked(), latitude, longitude, speed, course);
+                log.info(
+                    "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
+                    message.imei(),
+                    String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
+                    String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
+                    speed, course,
+                    latitude, longitude
+                );
             } else {
-                var imei = IMEI.of(message.imei());
+                // var imei = IMEI.of(message.imei());
                 log.warn("⚠️ Invalid location from {}: lat={}, lon={}", 
-                        imei.masked(), latitude, longitude);
+                        message.imei(), latitude, longitude);
             }
 
             sendLocationAck(ctx);
@@ -128,9 +132,9 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             var alarmStatus = message.alarmStatus().orElse(0);
 
             if (alarmStatus != 0) {
-                var imei = IMEI.of(message.imei());
+                // var imei = IMEI.of(message.imei());
                 log.warn("🚨 ALARM from {}: status=0x{:02X} at [{}, {}]", 
-                        imei.masked(), alarmStatus,
+                        message.imei(), alarmStatus,
                         message.latitude().orElse(0.0), 
                         message.longitude().orElse(0.0));
             }
@@ -150,9 +154,9 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             var gsmSignal = message.gsmSignal().orElse(0);
             var voltage = message.voltageLevel().orElse(0);
 
-            var imei = IMEI.of(message.imei());
+            // var imei = IMEI.of(message.imei());
             log.debug("💓 Heartbeat from {}: charging={}, gsm={}, voltage={}", 
-                    imei.masked(), charging, gsmSignal, voltage);
+                    message.imei(), charging, gsmSignal, voltage);
 
             sendHeartbeatAck(ctx);
 
@@ -166,9 +170,9 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
     private void handleString(ChannelHandlerContext ctx, DeviceMessage message) {
         try {
             var content = message.getData("content", String.class).orElse("");
-            var imei = IMEI.of(message.imei());
+            // var imei = IMEI.of(message.imei());
 
-            log.info("📝 String message from {}: {}", imei.masked(), content);
+            log.info("📝 String message from {}: {}", message.imei(), content);
             sendGenericAck(ctx);
 
         } catch (Exception e) {
@@ -183,9 +187,9 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             handleLocation(ctx, message);
 
             var phoneNumber = message.getData("phoneNumber", String.class).orElse("");
-            var imei = IMEI.of(message.imei());
+            // var imei = IMEI.of(message.imei());
 
-            log.info("📞 Address request from {}: phone={}", imei.masked(), phoneNumber);
+            log.info("📞 Address request from {}: phone={}", message.imei(), phoneNumber);
 
         } catch (Exception e) {
             log.error("❌ Error processing address request from {}: {}", 
@@ -195,8 +199,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
     }
 
     private void handleGeneric(ChannelHandlerContext ctx, DeviceMessage message) {
-        var imei = IMEI.of(message.imei());
-        log.debug("📄 Generic message from {}: type={}", imei.masked(), message.type());
+        // var imei = IMEI.of(message.imei());
+        log.debug("📄 Generic message from {}: type={}", message.imei(), message.type());
         sendGenericAck(ctx);
     }
 
@@ -212,8 +216,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
         ctx.writeAndFlush(buffer).addListener(future -> {
             if (future.isSuccess()) {
                 ctx.channel().attr(CONFIGURED_ATTR).set(true);
-                var maskedImei = IMEI.of(imei);
-                log.info("📡 Configuration sent to {}: 30s reporting", maskedImei.masked());
+                // var maskedImei = IMEI.of(imei);
+                log.info("📡 Configuration sent to {}: 30s reporting", imei);
             } else {
                 log.warn("⚠️ Failed to configure device {}: {}", 
                         imei, future.cause().getMessage());
@@ -259,8 +263,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
         var sessionId = ctx.channel().attr(SESSION_ID_ATTR).get();
 
         if (imei != null) {
-            var maskedImei = IMEI.of(imei);
-            log.info("📵 Device {} disconnected (session: {})", maskedImei.masked(), sessionId);
+            // var maskedImei = IMEI.of(imei);
+            log.info("📵 Device {} disconnected (session: {})", imei, sessionId);
 
             try {
                 sessionService.removeSession(ctx.channel());
@@ -277,7 +281,7 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         var imei = ctx.channel().attr(IMEI_ATTR).get();
-        var maskedImei = imei != null ? IMEI.of(imei).masked() : "UNKNOWN";
+        var maskedImei = imei != null ? imei : "UNKNOWN";
 
         log.error("❌ Handler exception for {} from {}: {}", 
                 maskedImei, ctx.channel().remoteAddress(), cause.getMessage(), cause);

@@ -2,7 +2,6 @@ package com.wheelseye.devicegateway.controller;
 
 import com.wheelseye.devicegateway.dto.DeviceSessionDto;
 import com.wheelseye.devicegateway.model.DeviceSession;
-import com.wheelseye.devicegateway.model.IMEI;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -89,8 +88,7 @@ public class DeviceController {
         String imei) {
 
         try {
-            IMEI deviceImei = IMEI.of(imei);
-            Optional<DeviceSession> session = deviceSessionService.getSessionByImei(deviceImei);
+            Optional<DeviceSession> session = deviceSessionService.getSessionByImei(imei);
 
             return session
                 .map(s -> modelMapper.map(s, DeviceSessionDto.class))
@@ -190,8 +188,7 @@ public class DeviceController {
         String imei) {
 
         try {
-            IMEI deviceImei = IMEI.of(imei);
-            boolean disconnected = deviceSessionService.disconnectDevice(deviceImei);
+            boolean disconnected = deviceSessionService.disconnectDevice(imei);
             
             if (disconnected) {
                 var response = new DisconnectResponse(

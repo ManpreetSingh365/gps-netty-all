@@ -1,8 +1,7 @@
 package com.wheelseye.devicegateway.service;
 
 import com.wheelseye.devicegateway.model.DeviceSession;
-import com.wheelseye.devicegateway.model.IMEI;
-import com.wheelseye.devicegateway.repository.RedisSessionRepository;
+import com.wheelseye.devicegateway.repository.DeviceSessionRepository;
 import io.netty.channel.Channel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @RequiredArgsConstructor
 public class DeviceSessionService {
 
-    private final RedisSessionRepository sessionRepository;
+    private final DeviceSessionRepository sessionRepository;
 
     // Configuration properties (can be injected from application.yml)
     private final int maxSessions = 10000;
@@ -44,16 +43,16 @@ public class DeviceSessionService {
      * Create or update device session
      */
     @CacheEvict(value = { "device-sessions", "session-stats" }, allEntries = true)
-    public DeviceSession createOrUpdateSession(IMEI imei, Channel channel) {
+    public DeviceSession createOrUpdateSession(String imei, Channel channel) {
         Objects.requireNonNull(imei, "IMEI must not be null");
         Objects.requireNonNull(channel, "Channel must not be null");
 
         try {
-            var existing = sessionRepository.findByImei(imei.value());
+            var existing = sessionRepository.findByImei(imei);
 
             if (existing.isPresent()) {
                 var session = existing.get();
-                log.info("🔄 Updating existing session for device: {}", imei.masked());
+                log.info("🔄 Updating existing session for device: {}", imei);
 
                 // Update channel and activity
                 session.setChannel(channel)
@@ -67,7 +66,7 @@ public class DeviceSessionService {
 
         } catch (Exception e) {
             log.error("❌ Error creating/updating session for {}: {}",
-                    imei.masked(), e.getMessage(), e);
+                    imei, e.getMessage(), e);
             throw new RuntimeException("Failed to create/update session", e);
         }
     }
@@ -80,8 +79,7 @@ public class DeviceSessionService {
             double longitude, Instant timestamp) {
         return CompletableFuture.runAsync(() -> {
             try {
-                var imeiObj = IMEI.of(imei);
-                var sessionOpt = sessionRepository.findByImei(imeiObj.value());
+                var sessionOpt = sessionRepository.findByImei(imei);
 
                 if (sessionOpt.isPresent()) {
                     var session = sessionOpt.get();
@@ -93,10 +91,18 @@ public class DeviceSessionService {
 
                     sessionRepository.save(session);
 
-                    log.debug("📍 Updated position for {}: [{:.6f}, {:.6f}]",
-                            imeiObj.masked(), latitude, longitude);
+                    log.debug("📍 Updated position for {}: [{:.6f}, {:.6f}]", imei, latitude, longitude);
+
+                log.info(
+                    "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🔗 https://www.google.com/maps?q={},{}",
+                    imei,
+                    String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
+                    String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
+                    latitude, longitude
+                );
+
                 } else {
-                    log.warn("⚠️ No session found for position update: {}", imeiObj.masked());
+                    log.warn("⚠️ No session found for position update: {}", imei);
                 }
 
             } catch (Exception e) {
@@ -110,17 +116,16 @@ public class DeviceSessionService {
      */
     public void updateLastHeartbeat(String imei) {
         try {
-            var imeiObj = IMEI.of(imei);
-            var sessionOpt = sessionRepository.findByImei(imeiObj.value());
+            var sessionOpt = sessionRepository.findByImei(imei);
 
             if (sessionOpt.isPresent()) {
                 var session = sessionOpt.get();
                 session.touch();
                 sessionRepository.save(session);
 
-                log.debug("💓 Updated heartbeat for: {}", imeiObj.masked());
+                log.debug("💓 Updated heartbeat for: {}", imei);
             } else {
-                log.warn("⚠️ No session found for heartbeat update: {}", imeiObj.masked());
+                log.warn("⚠️ No session found for heartbeat update: {}", imei);
             }
 
         } catch (Exception e) {
@@ -132,8 +137,8 @@ public class DeviceSessionService {
      * Get session by IMEI
      */
     @Cacheable(value = "session-by-imei", key = "#imei.value()")
-    public Optional<DeviceSession> getSessionByImei(IMEI imei) {
-        return sessionRepository.findByImei(imei.value());
+    public Optional<DeviceSession> getSessionByImei(String imei) {
+        return sessionRepository.findByImei(imei);
     }
 
     /**
@@ -209,9 +214,9 @@ public class DeviceSessionService {
      * Disconnect device by IMEI
      */
     @CacheEvict(value = { "device-sessions", "session-stats", "session-by-imei" }, allEntries = true)
-    public boolean disconnectDevice(IMEI imei) {
+    public boolean disconnectDevice(String imei) {
         try {
-            var sessionOpt = sessionRepository.findByImei(imei.value());
+            var sessionOpt = sessionRepository.findByImei(imei);
 
             if (sessionOpt.isPresent()) {
                 var session = sessionOpt.get();
@@ -225,15 +230,15 @@ public class DeviceSessionService {
                 sessionRepository.deleteById(session.getId());
 
                 log.info("📵 Disconnected device: {} (session: {})",
-                        imei.masked(), session.getId());
+                        imei, session.getId());
                 return true;
             } else {
-                log.warn("⚠️ No session found to disconnect: {}", imei.masked());
+                log.warn("⚠️ No session found to disconnect: {}", imei);
                 return false;
             }
 
         } catch (Exception e) {
-            log.error("❌ Error disconnecting device {}: {}", imei.masked(), e.getMessage(), e);
+            log.error("❌ Error disconnecting device {}: {}", imei, e.getMessage(), e);
             return false;
         }
     }
@@ -286,7 +291,7 @@ public class DeviceSessionService {
     /**
      * Create new session (private helper)
      */
-    private DeviceSession createNewSession(IMEI imei, Channel channel) {
+    private DeviceSession createNewSession(String imei, Channel channel) {
         var currentSessionCount = sessionRepository.count();
 
         if (currentSessionCount >= maxSessions) {
@@ -300,11 +305,11 @@ public class DeviceSessionService {
             var saved = sessionRepository.save(session);
             sessionCreatedCount.incrementAndGet();
 
-            log.info("✅ Created session {} for device: {}", saved.getId(), imei.masked());
+            log.info("✅ Created session {} for device: {}", saved.getId(), imei);
             return saved;
 
         } catch (Exception e) {
-            log.error("❌ Error creating new session for {}: {}", imei.masked(), e.getMessage(), e);
+            log.error("❌ Error creating new session for {}: {}", imei, e.getMessage(), e);
             throw new RuntimeException("Failed to create new session", e);
         }
     }
