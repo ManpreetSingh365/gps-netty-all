@@ -1,40 +1,37 @@
 package com.wheelseye.devicegateway.protocol;
 
 import lombok.Builder;
-import lombok.Getter;
+import lombok.Value;
 
 /**
  * Immutable protocol configuration for frame decoding and encoding.
- * Contains settings for length-field based framing and protocol-specific options.
+ * 
+ * Provides settings for Netty's LengthFieldBasedFrameDecoder and related encoding options.
+ * Used to define how raw byte streams are framed into protocol-specific messages.
  */
-
-@Getter
+@Value
 @Builder
-public final class ProtocolConfig {
+public class ProtocolConfig {
 
-    private final boolean useLengthFieldFraming;
-    private final int lengthFieldOffset;
-    private final int lengthFieldLength;
-    private final int lengthAdjustment;
-    private final int initialBytesToStrip;
-    private final boolean prependLengthOnOutbound;
+    // Enable/disable LengthFieldBasedFrameDecoder → true = framed by length, false = custom decoder
+    boolean useLengthFieldFraming;  
+    
+    // Byte offset where length field starts → wrong value causes misaligned frame parsing
+    int lengthFieldOffset;           
+    
+    // Size of length field (1/2/3/4/8 bytes) → must match protocol spec or decoding fails
+    int lengthFieldLength;          
+    
+    // Extra bytes to add/subtract from reported length → corrects discrepancies in total frame size
+    int lengthAdjustment;            
+    
+    // Number of bytes removed from decoded frame → strips protocol headers not needed downstream
+    int initialBytesToStrip;         
+    
+    // Whether to add length field on outgoing messages → required if peer expects framed payloads
+    boolean prependLengthOnOutbound; 
 
-    /**
-     * Constructor for ProtocolConfig
-     * 
-     * @param useLengthFieldFraming Whether to use Netty's LengthFieldBasedFrameDecoder
-     * @param lengthFieldOffset The offset of the length field
-     * @param lengthFieldLength The length of the length field (1, 2, 3, 4, or 8 bytes)
-     * @param lengthAdjustment The compensation value to add to the length
-     * @param initialBytesToStrip The number of bytes to strip from the decoded frame
-     * @param prependLengthOnOutbound Whether to prepend length field on outbound messages
-     */
-    public ProtocolConfig(boolean useLengthFieldFraming,
-                         int lengthFieldOffset,
-                         int lengthFieldLength,
-                         int lengthAdjustment,
-                         int initialBytesToStrip,
-                         boolean prependLengthOnOutbound) {
+    public ProtocolConfig(boolean useLengthFieldFraming,int lengthFieldOffset,int lengthFieldLength,int lengthAdjustment,int initialBytesToStrip,boolean prependLengthOnOutbound) {
         this.useLengthFieldFraming = useLengthFieldFraming;
         this.lengthFieldOffset = lengthFieldOffset;
         this.lengthFieldLength = lengthFieldLength;
@@ -43,46 +40,19 @@ public final class ProtocolConfig {
         this.prependLengthOnOutbound = prependLengthOnOutbound;
     }
 
-    /**
-     * @return true if protocol uses length-field based framing, false for custom frame decoder
-     */
-    public boolean useLengthFieldFraming() { 
-        return useLengthFieldFraming; 
+    // Factory method for custom decoders (no length field, e.g., GT06)
+    public static ProtocolConfig customFrameDecoder() {
+        return new ProtocolConfig(false, 0, 0, 0, 0, false);
     }
 
-    /**
-     * @return the offset of the length field in bytes from start of frame
-     */
-    public int lengthFieldOffset() { 
-        return lengthFieldOffset; 
+    // Factory method for length-field framing (inbound only)
+    public static ProtocolConfig lengthFieldFraming(int offset, int length, int adjustment, int strip) {
+        return new ProtocolConfig(true, offset, length, adjustment, strip, false);
     }
 
-    /**
-     * @return the length of the length field in bytes (1, 2, 3, 4, or 8)
-     */
-    public int lengthFieldLength() { 
-        return lengthFieldLength; 
-    }
-
-    /**
-     * @return the compensation value to add to the length field value
-     */
-    public int lengthAdjustment() { 
-        return lengthAdjustment; 
-    }
-
-    /**
-     * @return the number of bytes to strip from the beginning of the decoded frame
-     */
-    public int initialBytesToStrip() { 
-        return initialBytesToStrip; 
-    }
-
-    /**
-     * @return true if length field should be prepended on outbound messages
-     */
-    public boolean prependLengthOnOutbound() { 
-        return prependLengthOnOutbound; 
+    // Factory method for length-field framing with outbound prepend
+    public static ProtocolConfig lengthFieldFraming(int offset, int length, int adjustment, int strip, boolean prependOnOutbound) {
+        return new ProtocolConfig(true, offset, length, adjustment, strip, prependOnOutbound);
     }
 
     @Override
@@ -121,39 +91,5 @@ public final class ProtocolConfig {
         result = 31 * result + initialBytesToStrip;
         result = 31 * result + (prependLengthOnOutbound ? 1 : 0);
         return result;
-    }
-
-    /**
-     * Create a configuration for protocols that don't use length-field framing (like GT06)
-     */
-    public static ProtocolConfig customFrameDecoder() {
-        return new ProtocolConfig(false, 0, 0, 0, 0, false);
-    }
-
-    /**
-     * Create a configuration for protocols that use length-field framing
-     * 
-     * @param offset Offset of length field
-     * @param length Length of length field (1, 2, 3, 4, or 8 bytes)
-     * @param adjustment Adjustment to add to length value
-     * @param strip Number of bytes to strip from decoded frame
-     * @return ProtocolConfig for length-field framing
-     */
-    public static ProtocolConfig lengthFieldFraming(int offset, int length, int adjustment, int strip) {
-        return new ProtocolConfig(true, offset, length, adjustment, strip, false);
-    }
-
-    /**
-     * Create a configuration for protocols that use length-field framing with outbound prepending
-     * 
-     * @param offset Offset of length field
-     * @param length Length of length field (1, 2, 3, 4, or 8 bytes)
-     * @param adjustment Adjustment to add to length value
-     * @param strip Number of bytes to strip from decoded frame
-     * @param prependOnOutbound Whether to prepend length on outbound messages
-     * @return ProtocolConfig for length-field framing with outbound configuration
-     */
-    public static ProtocolConfig lengthFieldFraming(int offset, int length, int adjustment, int strip, boolean prependOnOutbound) {
-        return new ProtocolConfig(true, offset, length, adjustment, strip, prependOnOutbound);
     }
 }

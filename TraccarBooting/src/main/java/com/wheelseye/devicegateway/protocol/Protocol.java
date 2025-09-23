@@ -1,39 +1,30 @@
+// Protocol.java
 package com.wheelseye.devicegateway.protocol;
 
 import io.netty.channel.ChannelHandler;
+import lombok.NonNull;
 
 /**
  * Lightweight protocol abstraction. Implementations must be stateless.
- * This interface defines the contract for all device communication protocols.
  */
 public interface Protocol {
-    
-    /**
-     * @return The unique name of this protocol (e.g., "GT06", "T355", "GT02")
-     */
+
+    // The unique name of this protocol (e.g., "GT06", "T355", "GT02")
+    @NonNull
     String name();
-    
-    /**
-     * @return The configuration for frame decoding/encoding for this protocol
-     * NOTE: This should return ProtocolConfig (data class), NOT ProtocolConfiguration (Spring config class)
-     */
+
+    // The configuration for frame decoding/encoding
+    @NonNull
     ProtocolConfig config();
-    
-    /**
-     * @return Custom frame decoder for protocols that don't use length-field framing, 
-     *         or null if using Netty's LengthFieldBasedFrameDecoder
-     */
-    ChannelHandler frameDecoder(); 
-    
-    /**
-     * @return Protocol decoder that converts ByteBuf frames to DeviceMessage objects
-     *         This handler is REQUIRED and must never return null
-     */
-    ChannelHandler protocolDecoder();   
-    
-    /**
-     * @return Protocol encoder that converts DeviceMessage objects to ByteBuf responses
-     *         This handler is REQUIRED and must never return null
-     */
-    ChannelHandler protocolEncoder();   
+
+    // Custom frame decoder, or null if using length-field framing
+    ChannelHandler frameDecoder();
+
+    // Protocol decoder; must never return null
+    @NonNull
+    ChannelHandler protocolDecoder();
+
+    // Protocol encoder; must never return null
+    @NonNull
+    ChannelHandler protocolEncoder();
 }
