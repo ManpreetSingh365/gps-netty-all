@@ -2,136 +2,134 @@ package com.wheelseye.devicegateway.dto;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
-import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 
 import java.time.Instant;
-import java.util.Map;
 
 /**
- * Modern Device Session DTO - Fixed and corrected version using Java 21
+ * Device Session Data Transfer Object
  * 
- * Features:
- * - Java 21 record with proper syntax
- * - Fixed validation annotations
- * - Corrected builder pattern
- * - Minimal and focused functionality
+ * DTO for exposing device session information via REST APIs with:
+ * - JSON serialization optimization
+ * - Sensitive data filtering
+ * - Clean API response format
+ * - Proper timestamp formatting
+ * 
+ * @author WheelsEye Development Team
+ * @version 2.0.0
  */
-@Schema(description = "Device session information")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record DeviceSessionDto(
-    
-    @Schema(description = "Unique session identifier", example = "sess_abc123def456")
-    @NotNull
-    @Pattern(regexp = "^[a-zA-Z0-9_-]+$", message = "Session ID must contain only alphanumeric characters, hyphens, and underscores")
-    String sessionId,
-    
-    @Schema(description = "Device IMEI (15 digits)", example = "123456789012345")
-    @Pattern(regexp = "\\d{15}", message = "IMEI must be exactly 15 digits")
-    String imei,
-    
-    @Schema(description = "Netty channel identifier", example = "ch_789xyz")
-    String channelId,
-    
-    @Schema(description = "Remote IP address and port", example = "192.168.1.100:45678")
-    String remoteAddress,
-    
-    @Schema(description = "Protocol version used by device", example = "GT06v2.1")
-    String protocolVersion,
-    
-    @Schema(description = "Device model/variant", example = "GT06N")
-    String deviceVariant,
-    
-    @Schema(description = "Current device status", allowableValues = {"ONLINE", "OFFLINE", "IDLE", "ERROR"})
-    String status,
-    
-    @Schema(description = "Whether device is authenticated", example = "true")
-    @NotNull
-    boolean authenticated,
-    
-    @Schema(description = "Session creation timestamp")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", timezone = "UTC")
-    @NotNull
-    Instant createdAt,
-    
-    @Schema(description = "Last activity timestamp")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", timezone = "UTC")
-    @NotNull
-    Instant lastActivityAt,
-    
-    @Schema(description = "Last login timestamp")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", timezone = "UTC")
-    Instant lastLoginAt,
-    
-    @Schema(description = "Current GPS latitude", example = "40.7589")
-    Double currentLatitude,
-    
-    @Schema(description = "Current GPS longitude", example = "-73.9851")
-    Double currentLongitude,
-    
-    @Schema(description = "Last position update timestamp")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", timezone = "UTC")
-    Instant lastPositionTime,
-    
-    @Schema(description = "Last heartbeat timestamp")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", timezone = "UTC")
-    Instant lastHeartbeat,
-    
-    @Schema(description = "Additional session attributes")
-    @JsonInclude(JsonInclude.Include.NON_EMPTY)
-    Map<String, Object> attributes
-    
-) {
-    
+public class DeviceSessionDto {
+
     /**
-     * Static factory method for creating basic DTO
+     * Session identifier
      */
-    public static DeviceSessionDto create(String sessionId, String imei, boolean authenticated,
-                                        Instant createdAt, Instant lastActivityAt) {
-        return new DeviceSessionDto(
-            sessionId, imei, null, null, null, null, null, authenticated,
-            createdAt, lastActivityAt, null, null, null, null, null, Map.of()
-        );
-    }
-    
+    private String id;
+
     /**
-     * Check if session has valid position data
+     * Masked IMEI for privacy (shows last 4 digits only)
      */
-    public boolean hasValidPosition() {
-        return currentLatitude != null && currentLongitude != null && 
-               currentLatitude >= -90.0 && currentLatitude <= 90.0 &&
-               currentLongitude >= -180.0 && currentLongitude <= 180.0;
-    }
-    
+    private String imei;
+
     /**
-     * Get session duration in seconds
+     * Channel identifier
      */
-    public long getSessionDurationSeconds() {
-        if (createdAt == null || lastActivityAt == null) {
-            return 0;
+    private String channelId;
+
+    /**
+     * Remote address
+     */
+    private String remoteAddress;
+
+    /**
+     * Authentication status
+     */
+    private boolean authenticated;
+
+    /**
+     * GPS coordinates
+     */
+    private Double lastLatitude;
+    private Double lastLongitude;
+
+    /**
+     * Timestamps with proper JSON formatting
+     */
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private Instant lastPositionTime;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private Instant lastActivityAt;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private Instant createdAt;
+
+    /**
+     * Session status
+     */
+    private String status;
+
+    /**
+     * Protocol information
+     */
+    private String protocolVersion;
+    private String deviceModel;
+    private String firmwareVersion;
+
+    /**
+     * Device status information
+     */
+    private Integer signalStrength;
+    private Boolean isCharging;
+    private Integer batteryLevel;
+
+    /**
+     * Computed fields
+     */
+    private boolean active;
+    private boolean channelActive;
+    private boolean hasValidLocation;
+    private long sessionDurationSeconds;
+
+    /**
+     * Location display string
+     */
+    public String getLocationDisplay() {
+        if (lastLatitude != null && lastLongitude != null) {
+            return String.format("%.6f°%s, %.6f°%s", 
+                    Math.abs(lastLatitude), lastLatitude >= 0 ? "N" : "S",
+                    Math.abs(lastLongitude), lastLongitude >= 0 ? "E" : "W");
         }
-        return java.time.Duration.between(createdAt, lastActivityAt).getSeconds();
+        return null;
     }
-    
+
     /**
-     * Check if session is considered idle
+     * Google Maps link
      */
-    public boolean isIdle(java.time.Duration idleThreshold) {
-        if (lastActivityAt == null) {
-            return true;
+    public String getMapLink() {
+        if (lastLatitude != null && lastLongitude != null) {
+            return String.format("https://www.google.com/maps?q=%.6f,%.6f", lastLatitude, lastLongitude);
         }
-        return java.time.Duration.between(lastActivityAt, Instant.now()).compareTo(idleThreshold) > 0;
+        return null;
     }
-    
+
     /**
-     * Get display-friendly status
+     * Session age in human readable format
      */
-    public String getDisplayStatus() {
-        return switch (status) {
-            case null -> authenticated ? "ONLINE" : "CONNECTING";
-            case String s when s.isBlank() -> authenticated ? "ONLINE" : "CONNECTING";  
-            case String s -> s.toUpperCase();
-        };
+    public String getSessionAge() {
+        if (createdAt != null) {
+            long seconds = Instant.now().getEpochSecond() - createdAt.getEpochSecond();
+            if (seconds < 60) return seconds + "s";
+            if (seconds < 3600) return (seconds / 60) + "m";
+            return (seconds / 3600) + "h";
+        }
+        return "unknown";
     }
 }

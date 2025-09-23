@@ -8,20 +8,22 @@ import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.stereotype.Repository;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * EMERGENCY RedisSessionRepository with CRASH PREVENTION
+ * CORRECTED Device Session Repository - Fixes Redis Deserialization Issues
  * 
- * Implements aggressive error handling and session cleanup to prevent
- * infinite loops and application crashes from corrupted Redis data.
+ * This corrected version addresses the critical "@class" type ID errors by:
+ * - Proper handling of Redis deserialization without type casting issues
+ * - Safe object conversion with proper error handling
+ * - Clean repository operations without complex type validation
  * 
- * @author WheelsEye Development Team - EMERGENCY FIX
- * @since 1.0.0
+ * @author WheelsEye Development Team  
+ * @version 2.2.0 - CORRECTED
  */
 @Slf4j
 @Repository
@@ -36,90 +38,67 @@ public class DeviceSessionRepository {
     private static final String CHANNEL_INDEX_PREFIX = "channel-index:";
     private static final String ACTIVE_SESSIONS_SET = "active-sessions";
 
-    // Default TTL for sessions (30 minutes)
-    private static final Duration DEFAULT_TTL = Duration.ofMinutes(30);
-
-    // EMERGENCY: Track corrupted sessions to prevent infinite loops
-    private static final Set<String> CORRUPTED_SESSIONS = ConcurrentHashMap.newKeySet();
-    private static final Set<String> CLEANUP_IN_PROGRESS = ConcurrentHashMap.newKeySet();
-
-    // Statistics for monitoring
-    private volatile long successfulDeserializations = 0;
-    private volatile long failedDeserializations = 0;
-    private volatile long corruptedSessionsCleaned = 0;
-    private volatile long emergencyCleanups = 0;
+    // Session TTL (30 minutes)
+    private static final Duration SESSION_TTL = Duration.ofMinutes(30);
 
     /**
-     * Save session to Redis with enhanced error handling
+     * Save session to Redis with atomic transaction
      */
     public DeviceSession save(DeviceSession session) {
-        if (session == null) {
-            throw new IllegalArgumentException("Session cannot be null");
-        }
+        Objects.requireNonNull(session, "Session cannot be null");
+        Objects.requireNonNull(session.getId(), "Session ID cannot be null");
+        Objects.requireNonNull(session.getImei(), "Session IMEI cannot be null");
+
+        String sessionKey = SESSION_KEY_PREFIX + session.getId();
+        String imeiIndexKey = IMEI_INDEX_PREFIX + session.getImei();
+        String channelIndexKey = CHANNEL_INDEX_PREFIX + session.getChannelId();
 
         try {
-            String sessionKey = SESSION_KEY_PREFIX + session.getId();
-            String imeiIndexKey = IMEI_INDEX_PREFIX + session.getImei();
-            String channelIndexKey = CHANNEL_INDEX_PREFIX + session.getChannelId();
+            // Update last activity
+            session.touch();
 
-            // Remove from corrupted list if it was there
-            CORRUPTED_SESSIONS.remove(session.getId());
-
-            // Use Redis transaction for atomic operations
-            redisTemplate.execute(new SessionCallback<Object>() {
+            // Execute atomic transaction
+            List<Object> results = redisTemplate.execute(new SessionCallback<List<Object>>() {
                 @Override
-                public Object execute(RedisOperations operations) throws DataAccessException {
+                public List<Object> execute(RedisOperations operations) throws DataAccessException {
                     operations.multi();
 
-                    // Store session data with TTL
-                    operations.opsForValue().set(sessionKey, session, DEFAULT_TTL);
+                    // Store session with TTL
+                    operations.opsForValue().set(sessionKey, session, SESSION_TTL);
 
-                    // Create indexes for fast lookup with TTL
-                    operations.opsForValue().set(imeiIndexKey, session.getId(), DEFAULT_TTL);
-                    operations.opsForValue().set(channelIndexKey, session.getId(), DEFAULT_TTL);
+                    // Create lookup indexes with TTL
+                    operations.opsForValue().set(imeiIndexKey, session.getId(), SESSION_TTL);
+                    if (session.getChannelId() != null) {
+                        operations.opsForValue().set(channelIndexKey, session.getId(), SESSION_TTL);
+                    }
 
                     // Add to active sessions set
                     operations.opsForSet().add(ACTIVE_SESSIONS_SET, session.getId());
+                    operations.expire(ACTIVE_SESSIONS_SET, SESSION_TTL);
 
                     return operations.exec();
                 }
             });
 
-            log.debug("💾 Saved session to Redis: {}", session.getId());
+            log.debug("💾 Saved session to Redis: {} for IMEI: {}", session.getId(), session.getImei());
             return session;
 
         } catch (Exception e) {
-            log.error("❌ Error saving session to Redis: {}", e.getMessage(), e);
+            log.error("❌ Failed to save session {}: {}", session.getId(), e.getMessage(), e);
             throw new RuntimeException("Failed to save session to Redis", e);
         }
     }
 
     /**
-     * EMERGENCY: Find session by ID with aggressive corruption handling
+     * CORRECTED: Find session by ID with safe deserialization
      */
     public Optional<DeviceSession> findById(String sessionId) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             return Optional.empty();
         }
 
-        // EMERGENCY: Skip if already identified as corrupted
-        if (CORRUPTED_SESSIONS.contains(sessionId)) {
-            log.debug("🛑 EMERGENCY: Skipping known corrupted session {}", sessionId);
-            return Optional.empty();
-        }
-
-        // EMERGENCY: Skip if cleanup is in progress
-        if (CLEANUP_IN_PROGRESS.contains(sessionId)) {
-            log.debug("🧹 EMERGENCY: Cleanup in progress for session {}", sessionId);
-            return Optional.empty();
-        }
-
         try {
             String sessionKey = SESSION_KEY_PREFIX + sessionId;
-
-            // Set current session context for circuit breaker
-            setCurrentSessionContext(sessionId);
-
             Object rawSession = redisTemplate.opsForValue().get(sessionKey);
 
             if (rawSession == null) {
@@ -127,130 +106,187 @@ public class DeviceSessionRepository {
                 return Optional.empty();
             }
 
-            // Handle successful deserialization
-            if (rawSession instanceof DeviceSession) {
-                DeviceSession session = (DeviceSession) rawSession;
-                successfulDeserializations++;
-                log.debug("✅ Found session: {}", sessionId);
+            // CORRECTED: Safe conversion using proper deserialization
+            DeviceSession session = convertToDeviceSession(rawSession, sessionId);
+            if (session != null) {
+                log.debug("✅ Found session: {} for IMEI: {}", sessionId, session.getImei());
                 return Optional.of(session);
             } else {
-                // Handle unexpected types - EMERGENCY CLEANUP
-                log.error("🚨 EMERGENCY: Unexpected session type for ID {}: {} - FORCE CLEANUP", 
-                         sessionId, rawSession.getClass().getSimpleName());
-                emergencyCleanupSession(sessionId);
+                log.warn("⚠️ Could not convert session data for ID: {}", sessionId);
+                // Clean up corrupted session
+                redisTemplate.delete(sessionKey);
                 return Optional.empty();
             }
 
         } catch (Exception e) {
-            log.error("🚨 EMERGENCY: Critical error finding session {}: {}", sessionId, e.getMessage());
-
-            // Increment failed counter
-            failedDeserializations++;
-
-            // EMERGENCY: Mark as corrupted and cleanup immediately
-            markAsCorruptedAndCleanup(sessionId, e);
+            log.error("❌ Error finding session {}: {}", sessionId, e.getMessage(), e);
             return Optional.empty();
-
-        } finally {
-            // Clear session context
-            clearCurrentSessionContext();
         }
     }
 
     /**
-     * EMERGENCY: Mark session as corrupted and perform immediate cleanup
+     * CORRECTED: Safe conversion from Redis object to DeviceSession
      */
-    private void markAsCorruptedAndCleanup(String sessionId, Exception error) {
-        // Add to corrupted sessions set
-        CORRUPTED_SESSIONS.add(sessionId);
-
-        log.error("🛑 EMERGENCY: Marked session {} as CORRUPTED due to: {}", 
-                 sessionId, error.getMessage());
-
-        // Trigger immediate emergency cleanup
-        emergencyCleanupSession(sessionId);
-
-        // Prevent memory leak - limit corrupted sessions set size
-        if (CORRUPTED_SESSIONS.size() > 1000) {
-            Iterator<String> iterator = CORRUPTED_SESSIONS.iterator();
-            for (int i = 0; i < 100 && iterator.hasNext(); i++) {
-                iterator.next();
-                iterator.remove();
-            }
-            log.warn("🧹 EMERGENCY: Cleaned up oldest corrupted session markers");
-        }
-    }
-
-    /**
-     * EMERGENCY: Force cleanup of corrupted session
-     */
-    private void emergencyCleanupSession(String sessionId) {
-        // Prevent concurrent cleanup
-        if (!CLEANUP_IN_PROGRESS.add(sessionId)) {
-            log.debug("🛑 EMERGENCY: Cleanup already in progress for {}", sessionId);
-            return;
-        }
-
+    private DeviceSession convertToDeviceSession(Object rawSession, String sessionId) {
         try {
-            log.warn("🚨 EMERGENCY CLEANUP: Force removing corrupted session {}", sessionId);
-
-            // Force delete all related keys
-            String sessionKey = SESSION_KEY_PREFIX + sessionId;
-
-            // Delete main session key
-            Boolean deleted = redisTemplate.delete(sessionKey);
-            if (Boolean.TRUE.equals(deleted)) {
-                log.info("🗑️ EMERGENCY: Deleted main session key for {}", sessionId);
+            // If it's already a DeviceSession (direct cast worked)
+            if (rawSession instanceof DeviceSession) {
+                return (DeviceSession) rawSession;
             }
 
-            // Remove from active sessions set
-            Long removed = redisTemplate.opsForSet().remove(ACTIVE_SESSIONS_SET, sessionId);
-            if (removed != null && removed > 0) {
-                log.info("🗑️ EMERGENCY: Removed {} from active sessions set", sessionId);
+            // If it's a Map (JSON deserialized as Map), convert it
+            if (rawSession instanceof Map<?, ?> sessionMap) {
+                return mapToDeviceSession(sessionMap);
             }
 
-            // Try to cleanup indexes (best effort)
-            try {
-                Set<String> imeiKeys = redisTemplate.keys(IMEI_INDEX_PREFIX + "*");
-                Set<String> channelKeys = redisTemplate.keys(CHANNEL_INDEX_PREFIX + "*");
-
-                if (imeiKeys != null) {
-                    for (String imeiKey : imeiKeys) {
-                        Object value = redisTemplate.opsForValue().get(imeiKey);
-                        if (sessionId.equals(value)) {
-                            redisTemplate.delete(imeiKey);
-                            log.debug("🗑️ EMERGENCY: Cleaned up IMEI index for {}", sessionId);
-                        }
-                    }
-                }
-
-                if (channelKeys != null) {
-                    for (String channelKey : channelKeys) {
-                        Object value = redisTemplate.opsForValue().get(channelKey);
-                        if (sessionId.equals(value)) {
-                            redisTemplate.delete(channelKey);
-                            log.debug("🗑️ EMERGENCY: Cleaned up channel index for {}", sessionId);
-                        }
-                    }
-                }
-            } catch (Exception indexError) {
-                log.warn("⚠️ EMERGENCY: Index cleanup failed for {}: {}", sessionId, indexError.getMessage());
+            // If it's a LinkedHashMap (common Redis deserialization result)
+            if (rawSession instanceof LinkedHashMap<?, ?> linkedMap) {
+                return mapToDeviceSession(linkedMap);
             }
 
-            emergencyCleanups++;
-            corruptedSessionsCleaned++;
-
-            log.info("✅ EMERGENCY CLEANUP COMPLETED for session {}", sessionId);
+            log.warn("⚠️ Unexpected session type for ID {}: {}", sessionId, rawSession.getClass().getSimpleName());
+            return null;
 
         } catch (Exception e) {
-            log.error("❌ EMERGENCY CLEANUP FAILED for session {}: {}", sessionId, e.getMessage(), e);
-        } finally {
-            CLEANUP_IN_PROGRESS.remove(sessionId);
+            log.error("❌ Error converting session {}: {}", sessionId, e.getMessage(), e);
+            return null;
         }
     }
 
     /**
-     * Find session by IMEI with corruption protection
+     * Convert Map data to DeviceSession object
+     */
+    @SuppressWarnings("unchecked")
+    private DeviceSession mapToDeviceSession(Map<?, ?> sessionMap) {
+        try {
+            // Extract basic fields safely
+            String id = getStringValue(sessionMap, "id");
+            String imei = getStringValue(sessionMap, "imei");
+            String channelId = getStringValue(sessionMap, "channelId");
+            String remoteAddress = getStringValue(sessionMap, "remoteAddress");
+
+            if (id == null || imei == null) {
+                log.warn("⚠️ Missing required fields in session map: id={}, imei={}", id, imei);
+                return null;
+            }
+
+            // Create DeviceSession with required fields
+            DeviceSession session = DeviceSession.create(imei, channelId, remoteAddress);
+            session.setId(id);
+
+            // Set optional fields safely
+            session.setAuthenticated(getBooleanValue(sessionMap, "authenticated"));
+
+            // GPS coordinates
+            Double latitude = getDoubleValue(sessionMap, "lastLatitude");
+            Double longitude = getDoubleValue(sessionMap, "lastLongitude");
+            if (latitude != null && longitude != null) {
+                session.setLastLatitude(latitude);
+                session.setLastLongitude(longitude);
+            }
+
+            // Timestamps
+            Instant lastActivityAt = getInstantValue(sessionMap, "lastActivityAt");
+            if (lastActivityAt != null) {
+                session.setLastActivityAt(lastActivityAt);
+            }
+
+            Instant createdAt = getInstantValue(sessionMap, "createdAt");
+            if (createdAt != null) {
+                session.setCreatedAt(createdAt);
+            }
+
+            Instant lastPositionTime = getInstantValue(sessionMap, "lastPositionTime");
+            if (lastPositionTime != null) {
+                session.setLastPositionTime(lastPositionTime);
+            }
+
+            // Status
+            String statusStr = getStringValue(sessionMap, "status");
+            if (statusStr != null) {
+                try {
+                    DeviceSession.SessionStatus status = DeviceSession.SessionStatus.valueOf(statusStr);
+                    session.setStatus(status);
+                } catch (IllegalArgumentException e) {
+                    log.debug("Invalid status value: {}, using default", statusStr);
+                }
+            }
+
+            // Protocol info
+            session.setProtocolVersion(getStringValue(sessionMap, "protocolVersion"));
+            session.setDeviceModel(getStringValue(sessionMap, "deviceModel"));
+            session.setFirmwareVersion(getStringValue(sessionMap, "firmwareVersion"));
+
+            // Device status
+            session.setSignalStrength(getIntegerValue(sessionMap, "signalStrength"));
+            session.setIsCharging(getBooleanValue(sessionMap, "isCharging"));
+            session.setBatteryLevel(getIntegerValue(sessionMap, "batteryLevel"));
+
+            return session;
+
+        } catch (Exception e) {
+            log.error("❌ Error mapping session data: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    // Helper methods for safe type conversion
+    private String getStringValue(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        return value != null ? value.toString() : null;
+    }
+
+    private Boolean getBooleanValue(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        if (value instanceof Boolean) return (Boolean) value;
+        if (value instanceof String) return Boolean.parseBoolean((String) value);
+        return false; // default
+    }
+
+    private Double getDoubleValue(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        if (value instanceof Number) return ((Number) value).doubleValue();
+        if (value instanceof String) {
+            try {
+                return Double.parseDouble((String) value);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Integer getIntegerValue(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        if (value instanceof Number) return ((Number) value).intValue();
+        if (value instanceof String) {
+            try {
+                return Integer.parseInt((String) value);
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0; // default
+    }
+
+    private Instant getInstantValue(Map<?, ?> map, String key) {
+        Object value = map.get(key);
+        if (value instanceof Number) {
+            return Instant.ofEpochMilli(((Number) value).longValue());
+        }
+        if (value instanceof String) {
+            try {
+                return Instant.parse((String) value);
+            } catch (Exception e) {
+                log.debug("Could not parse instant from string: {}", value);
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Find session by IMEI using index
      */
     public Optional<DeviceSession> findByImei(String imei) {
         if (imei == null || imei.trim().isEmpty()) {
@@ -261,11 +297,11 @@ public class DeviceSessionRepository {
             String imeiIndexKey = IMEI_INDEX_PREFIX + imei;
             Object sessionIdObj = redisTemplate.opsForValue().get(imeiIndexKey);
 
-            if (sessionIdObj instanceof String) {
-                String sessionId = (String) sessionIdObj;
+            if (sessionIdObj instanceof String sessionId) {
                 return findById(sessionId);
             } else if (sessionIdObj != null) {
-                log.warn("⚠️ Invalid session ID type for IMEI {}: {}", imei, sessionIdObj.getClass().getSimpleName());
+                log.warn("⚠️ Invalid session ID type for IMEI {}: {} - cleaning up", 
+                        imei, sessionIdObj.getClass().getSimpleName());
                 redisTemplate.delete(imeiIndexKey);
             }
 
@@ -278,7 +314,7 @@ public class DeviceSessionRepository {
     }
 
     /**
-     * Find session by channel ID with corruption protection
+     * Find session by channel ID using index
      */
     public Optional<DeviceSession> findByChannelId(String channelId) {
         if (channelId == null || channelId.trim().isEmpty()) {
@@ -289,11 +325,11 @@ public class DeviceSessionRepository {
             String channelIndexKey = CHANNEL_INDEX_PREFIX + channelId;
             Object sessionIdObj = redisTemplate.opsForValue().get(channelIndexKey);
 
-            if (sessionIdObj instanceof String) {
-                String sessionId = (String) sessionIdObj;
+            if (sessionIdObj instanceof String sessionId) {
                 return findById(sessionId);
             } else if (sessionIdObj != null) {
-                log.warn("⚠️ Invalid session ID type for channel {}: {}", channelId, sessionIdObj.getClass().getSimpleName());
+                log.warn("⚠️ Invalid session ID type for channel {}: {} - cleaning up", 
+                        channelId, sessionIdObj.getClass().getSimpleName());
                 redisTemplate.delete(channelIndexKey);
             }
 
@@ -306,20 +342,19 @@ public class DeviceSessionRepository {
     }
 
     /**
-     * Get all active sessions with corruption filtering
+     * Get all active sessions
      */
     public List<DeviceSession> findAll() {
         try {
             Set<Object> sessionIds = redisTemplate.opsForSet().members(ACTIVE_SESSIONS_SET);
 
             if (sessionIds == null || sessionIds.isEmpty()) {
-                return List.of();
+                return Collections.emptyList();
             }
 
             return sessionIds.stream()
-                    .filter(id -> id instanceof String)
-                    .map(Object::toString)
-                    .filter(sessionId -> !CORRUPTED_SESSIONS.contains(sessionId)) // Filter corrupted
+                    .filter(String.class::isInstance)
+                    .map(String.class::cast)
                     .map(this::findById)
                     .filter(Optional::isPresent)
                     .map(Optional::get)
@@ -327,17 +362,15 @@ public class DeviceSessionRepository {
 
         } catch (Exception e) {
             log.error("❌ Error finding all sessions: {}", e.getMessage(), e);
-            return List.of();
+            return Collections.emptyList();
         }
     }
 
     /**
-     * Find sessions by last activity cutoff time (for cleanup)
+     * Find sessions by last activity cutoff for cleanup
      */
     public List<DeviceSession> findByLastActivityAtBefore(Instant cutoffTime) {
-        if (cutoffTime == null) {
-            return List.of();
-        }
+        Objects.requireNonNull(cutoffTime, "Cutoff time cannot be null");
 
         return findAll().stream()
                 .filter(session -> session.getLastActivityAt() != null && 
@@ -346,55 +379,46 @@ public class DeviceSessionRepository {
     }
 
     /**
-     * Delete session by ID with comprehensive cleanup
+     * Delete session with comprehensive cleanup
      */
     public void deleteById(String sessionId) {
         if (sessionId == null || sessionId.trim().isEmpty()) {
             return;
         }
 
-        // Mark for cleanup to prevent concurrent access
-        CLEANUP_IN_PROGRESS.add(sessionId);
-
         try {
+            // Get session first to clean up indexes
             Optional<DeviceSession> sessionOpt = findById(sessionId);
 
             if (sessionOpt.isPresent()) {
                 DeviceSession session = sessionOpt.get();
-                deleteSessionCompletely(sessionId, session.getImei(), session.getChannelId());
+                deleteSessionWithIndexes(sessionId, session.getImei(), session.getChannelId());
             } else {
-                // Force cleanup even if session not found
-                emergencyCleanupSession(sessionId);
+                // Clean up just the session key and active set
+                deleteSessionBasic(sessionId);
             }
 
-            // Remove from corrupted list
-            CORRUPTED_SESSIONS.remove(sessionId);
-
-            log.debug("🗑️ Deleted session from Redis: {}", sessionId);
+            log.debug("🗑️ Deleted session: {}", sessionId);
 
         } catch (Exception e) {
             log.error("❌ Error deleting session {}: {}", sessionId, e.getMessage(), e);
-            // Force emergency cleanup on error
-            emergencyCleanupSession(sessionId);
-        } finally {
-            CLEANUP_IN_PROGRESS.remove(sessionId);
         }
     }
 
     /**
-     * Complete session deletion with all indexes
+     * Delete session with all indexes atomically
      */
-    private void deleteSessionCompletely(String sessionId, String imei, String channelId) {
+    private void deleteSessionWithIndexes(String sessionId, String imei, String channelId) {
         try {
             redisTemplate.execute(new SessionCallback<Object>() {
                 @Override
                 public Object execute(RedisOperations operations) throws DataAccessException {
                     operations.multi();
 
-                    // Remove main session data
+                    // Remove main session
                     operations.delete(SESSION_KEY_PREFIX + sessionId);
 
-                    // Remove indexes if we have the info
+                    // Remove indexes
                     if (imei != null) {
                         operations.delete(IMEI_INDEX_PREFIX + imei);
                     }
@@ -409,22 +433,30 @@ public class DeviceSessionRepository {
                 }
             });
         } catch (Exception e) {
-            log.warn("⚠️ Error during complete session deletion: {}", e.getMessage());
-            // Fallback to emergency cleanup
-            emergencyCleanupSession(sessionId);
+            log.warn("⚠️ Failed atomic deletion for {}, trying basic cleanup: {}", sessionId, e.getMessage());
+            deleteSessionBasic(sessionId);
         }
     }
 
     /**
-     * Count active sessions (excluding corrupted)
+     * Basic session deletion fallback
+     */
+    private void deleteSessionBasic(String sessionId) {
+        try {
+            redisTemplate.delete(SESSION_KEY_PREFIX + sessionId);
+            redisTemplate.opsForSet().remove(ACTIVE_SESSIONS_SET, sessionId);
+        } catch (Exception e) {
+            log.error("❌ Even basic deletion failed for {}: {}", sessionId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Count active sessions
      */
     public long count() {
         try {
             Long count = redisTemplate.opsForSet().size(ACTIVE_SESSIONS_SET);
-            long activeCount = count != null ? count : 0L;
-
-            // Subtract corrupted sessions
-            return Math.max(0, activeCount - CORRUPTED_SESSIONS.size());
+            return count != null ? count : 0L;
         } catch (Exception e) {
             log.error("❌ Error counting sessions: {}", e.getMessage(), e);
             return 0L;
@@ -432,85 +464,9 @@ public class DeviceSessionRepository {
     }
 
     /**
-     * Get enhanced repository statistics including emergency metrics
+     * Health check for Redis connectivity
      */
-    // public Map<String, Object> getSessionStatistics() {
-    //     try {
-    //         List<DeviceSession> allSessions = findAll();
-
-    //         long total = allSessions.size();
-    //         long authenticated = allSessions.stream()
-    //                 .filter(DeviceSession::isAuthenticated)
-    //                 .count();
-    //         long withLocation = allSessions.stream()
-    //                 .filter(DeviceSession::hasValidLocation)
-    //                 .count();
-    //         long active = allSessions.stream()
-    //                 .filter(DeviceSession::isChannelActive)
-    //                 .count();
-
-    //         return Map.of(
-    //                 "total", total,
-    //                 "authenticated", authenticated,
-    //                 "withLocation", withLocation,
-    //                 "active", active,
-    //                 "successfulDeserializations", successfulDeserializations,
-    //                 "failedDeserializations", failedDeserializations,
-    //                 "corruptedSessions", (long) CORRUPTED_SESSIONS.size(),
-    //                 "corruptedSessionsCleaned", corruptedSessionsCleaned,
-    //                 "emergencyCleanups", emergencyCleanups,
-    //                 "cleanupInProgress", (long) CLEANUP_IN_PROGRESS.size(),
-    //                 "timestamp", Instant.now()
-    //         );
-
-    //     } catch (Exception e) {
-    //         log.error("❌ Error getting session statistics: {}", e.getMessage(), e);
-    //         return Map.of(
-    //             "error", e.getMessage(),
-    //             "corruptedSessions", (long) CORRUPTED_SESSIONS.size(),
-    //             "emergencyCleanups", emergencyCleanups,
-    //             "timestamp", Instant.now()
-    //         );
-    //     }
-    // }
-
-    /**
-     * EMERGENCY: Clear all corrupted session markers
-     */
-    public void clearCorruptedSessions() {
-        int cleared = CORRUPTED_SESSIONS.size();
-        CORRUPTED_SESSIONS.clear();
-        CLEANUP_IN_PROGRESS.clear();
-
-        log.info("🧹 EMERGENCY: Cleared {} corrupted session markers", cleared);
-    }
-
-    /**
-     * EMERGENCY: Get list of corrupted session IDs
-     */
-    public Set<String> getCorruptedSessionIds() {
-        return new HashSet<>(CORRUPTED_SESSIONS);
-    }
-
-    // Context management for circuit breaker
-    private static final ThreadLocal<String> CURRENT_SESSION_CONTEXT = new ThreadLocal<>();
-
-    private void setCurrentSessionContext(String sessionId) {
-        CURRENT_SESSION_CONTEXT.set(sessionId);
-    }
-
-    private void clearCurrentSessionContext() {
-        CURRENT_SESSION_CONTEXT.remove();
-    }
-
-    public static String getCurrentSessionContext() {
-        return CURRENT_SESSION_CONTEXT.get();
-    }
-
-    /**
-     * Health check with emergency metrics
-     */
-    public Map<String, Object> healthCheck() {
+    public boolean isHealthy() {
         try {
             String testKey = "health-check-" + System.currentTimeMillis();
             String testValue = "OK";
@@ -519,71 +475,44 @@ public class DeviceSessionRepository {
             Object retrieved = redisTemplate.opsForValue().get(testKey);
             redisTemplate.delete(testKey);
 
-            boolean healthy = testValue.equals(retrieved);
-
-            return Map.of(
-                "redis_connectivity", healthy,
-                "successful_deserializations", successfulDeserializations,
-                "failed_deserializations", failedDeserializations,
-                "corrupted_sessions", CORRUPTED_SESSIONS.size(),
-                "emergency_cleanups", emergencyCleanups,
-                "cleanup_in_progress", CLEANUP_IN_PROGRESS.size(),
-                "timestamp", Instant.now()
-            );
+            return testValue.equals(retrieved);
         } catch (Exception e) {
             log.error("❌ Redis health check failed: {}", e.getMessage());
-            return Map.of(
-                "redis_connectivity", false,
-                "error", e.getMessage(),
-                "corrupted_sessions", CORRUPTED_SESSIONS.size(),
-                "timestamp", Instant.now()
-            );
+            return false;
         }
     }
 
     /**
-     * EMERGENCY: Force cleanup of all sessions
+     * Clear all sessions (for testing/maintenance)
      */
     public void deleteAll() {
         try {
-            log.warn("🚨 EMERGENCY: Force clearing ALL Redis sessions");
+            log.warn("🧹 Clearing ALL sessions from Redis");
 
-            // Clear all session patterns
             Set<String> sessionKeys = redisTemplate.keys(SESSION_KEY_PREFIX + "*");
             Set<String> imeiKeys = redisTemplate.keys(IMEI_INDEX_PREFIX + "*");
             Set<String> channelKeys = redisTemplate.keys(CHANNEL_INDEX_PREFIX + "*");
 
             if (sessionKeys != null && !sessionKeys.isEmpty()) {
                 redisTemplate.delete(sessionKeys);
-                log.info("🗑️ EMERGENCY: Deleted {} session keys", sessionKeys.size());
+                log.info("🗑️ Deleted {} session keys", sessionKeys.size());
             }
 
             if (imeiKeys != null && !imeiKeys.isEmpty()) {
                 redisTemplate.delete(imeiKeys);
-                log.info("🗑️ EMERGENCY: Deleted {} IMEI index keys", imeiKeys.size());
+                log.info("🗑️ Deleted {} IMEI index keys", imeiKeys.size());
             }
 
             if (channelKeys != null && !channelKeys.isEmpty()) {
                 redisTemplate.delete(channelKeys);
-                log.info("🗑️ EMERGENCY: Deleted {} channel index keys", channelKeys.size());
+                log.info("🗑️ Deleted {} channel index keys", channelKeys.size());
             }
 
             redisTemplate.delete(ACTIVE_SESSIONS_SET);
-
-            // Clear tracking sets
-            CORRUPTED_SESSIONS.clear();
-            CLEANUP_IN_PROGRESS.clear();
-
-            // Reset statistics
-            successfulDeserializations = 0;
-            failedDeserializations = 0;
-            corruptedSessionsCleaned = 0;
-            emergencyCleanups = 0;
-
-            log.info("✅ EMERGENCY: All sessions cleared and statistics reset");
+            log.info("✅ All sessions cleared successfully");
 
         } catch (Exception e) {
-            log.error("❌ EMERGENCY: Error clearing all sessions: {}", e.getMessage(), e);
+            log.error("❌ Error clearing all sessions: {}", e.getMessage(), e);
         }
     }
 }

@@ -5,42 +5,47 @@ import lombok.*;
 import lombok.experimental.Accessors;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonTypeInfo;
-import com.fasterxml.jackson.annotation.JsonTypeName;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.datatype.jsr310.deser.InstantDeserializer;
+import com.fasterxml.jackson.datatype.jsr310.ser.InstantSerializer;
+
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+
+import java.io.Serial;
 import java.io.Serializable;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
- * DeviceSession Model - Production-Ready Redis Implementation
+ * Simple DeviceSession Model - CORRECTED for Redis Compatibility
  * 
- * Enhanced POJO for Redis storage with proper serialization annotations
- * and comprehensive validation. Includes all methods for service compatibility.
+ * This simplified version eliminates all Redis serialization issues by:
+ * - Removing complex type annotations that caused @class requirements
+ * - Using simple field mappings that work with standard JSON
+ * - Clean serialization without type validation complications
  * 
  * @author WheelsEye Development Team
- * @since 1.0.0
+ * @version 2.2.0 - CORRECTED & SIMPLIFIED
  */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder(toBuilder = true)
 @Accessors(chain = true)
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "@type")
-@JsonTypeName("DeviceSession")
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class DeviceSession implements Serializable {
 
-    private static final long serialVersionUID = 1L;
+    @Serial
+    private static final long serialVersionUID = 3L; // Updated for compatibility
 
     /**
      * Unique session identifier
      */
     @NotNull
-    @Pattern(regexp = "^session_[a-f0-9]{16}$", message = "Invalid session ID format")
     private String id;
 
     /**
@@ -73,54 +78,67 @@ public class DeviceSession implements Serializable {
      */
     private Double lastLatitude;
     private Double lastLongitude;
+
+    /**
+     * Timestamps with simple serialization
+     */
+    @JsonSerialize(using = InstantSerializer.class)
+    @JsonDeserialize(using = InstantDeserializer.class)
     private Instant lastPositionTime;
 
-    /**
-     * Session activity tracking
-     */
     @Builder.Default
-    @JsonSerialize
-    @JsonDeserialize
+    @JsonSerialize(using = InstantSerializer.class)
+    @JsonDeserialize(using = InstantDeserializer.class)
     private Instant lastActivityAt = Instant.now();
 
-    /**
-     * Session creation timestamp
-     */
     @Builder.Default
-    @JsonSerialize
-    @JsonDeserialize
+    @JsonSerialize(using = InstantSerializer.class)
+    @JsonDeserialize(using = InstantDeserializer.class)
     private Instant createdAt = Instant.now();
 
     /**
-     * Session status
+     * Session status as simple string (avoids enum serialization issues)
      */
     @Builder.Default
-    private SessionStatus status = SessionStatus.ACTIVE;
+    private String status = "ACTIVE";
 
     /**
-     * Protocol-specific data (optional)
+     * Protocol information (optional)
      */
     private String protocolVersion;
     private String deviceModel;
     private String firmwareVersion;
 
     /**
-     * Transient field for Netty channel (not serialized to Redis)
-     * This field is excluded from JSON serialization and Redis storage
+     * Device status information
+     */
+    @Builder.Default
+    private Integer signalStrength = 0;
+
+    @Builder.Default
+    private Boolean isCharging = false;
+
+    @Builder.Default
+    private Integer batteryLevel = 0;
+
+    /**
+     * Transient field for Netty channel (not serialized)
      */
     @JsonIgnore
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
     private transient Channel channel;
 
-    // Factory Methods
+    // === FACTORY METHODS ===
 
     /**
-     * Create new device session with IMEI object and channel
+     * Create new device session with IMEI and channel
      */
     public static DeviceSession create(@NonNull String imei, @NonNull Channel channel) {
         Objects.requireNonNull(imei, "IMEI cannot be null");
         Objects.requireNonNull(channel, "Channel cannot be null");
+
+        validateImei(imei);
 
         return DeviceSession.builder()
                 .id(generateSessionId())
@@ -131,17 +149,19 @@ public class DeviceSession implements Serializable {
                 .authenticated(false)
                 .lastActivityAt(Instant.now())
                 .createdAt(Instant.now())
-                .status(SessionStatus.ACTIVE)
+                .status("ACTIVE")
                 .build();
     }
 
     /**
-     * Create new device session with string parameters (for Redis deserialization)
+     * Create session for Redis deserialization
      */
     public static DeviceSession create(@NonNull String imei, @NonNull String channelId, @NonNull String remoteAddress) {
         Objects.requireNonNull(imei, "IMEI cannot be null");
         Objects.requireNonNull(channelId, "Channel ID cannot be null");
         Objects.requireNonNull(remoteAddress, "Remote address cannot be null");
+
+        validateImei(imei);
 
         return DeviceSession.builder()
                 .id(generateSessionId())
@@ -151,22 +171,22 @@ public class DeviceSession implements Serializable {
                 .authenticated(false)
                 .lastActivityAt(Instant.now())
                 .createdAt(Instant.now())
-                .status(SessionStatus.ACTIVE)
+                .status("ACTIVE")
                 .build();
     }
 
-    // Service Methods
+    // === BUSINESS METHODS ===
 
     /**
-     * Update last activity timestamp
+     * Update last activity timestamp (thread-safe)
      */
-    public DeviceSession touch() {
+    public synchronized DeviceSession touch() {
         this.lastActivityAt = Instant.now();
         return this;
     }
 
     /**
-     * Set the transient channel reference (not persisted to Redis)
+     * Set transient channel reference
      */
     public DeviceSession setChannel(Channel channel) {
         this.channel = channel;
@@ -178,46 +198,35 @@ public class DeviceSession implements Serializable {
     }
 
     /**
-     * Update GPS coordinates with validation
+     * Update GPS position with validation
      */
-    public DeviceSession setLastLatitude(double latitude) {
-        if (latitude >= -90.0 && latitude <= 90.0) {
-            this.lastLatitude = latitude;
-        } else {
-            throw new IllegalArgumentException("Latitude must be between -90 and 90 degrees");
-        }
-        return this;
-    }
+    public synchronized DeviceSession updatePosition(double latitude, double longitude, Instant timestamp) {
+        validateCoordinates(latitude, longitude);
 
-    public DeviceSession setLastLongitude(double longitude) {
-        if (longitude >= -180.0 && longitude <= 180.0) {
-            this.lastLongitude = longitude;
-        } else {
-            throw new IllegalArgumentException("Longitude must be between -180 and 180 degrees");
-        }
-        return this;
-    }
+        this.lastLatitude = latitude;
+        this.lastLongitude = longitude;
+        this.lastPositionTime = timestamp != null ? timestamp : Instant.now();
+        touch();
 
-    public DeviceSession setLastPositionTime(Instant timestamp) {
-        this.lastPositionTime = timestamp;
         return this;
     }
 
     /**
-     * Update position with all coordinates at once
+     * Update device status information
      */
-    public DeviceSession updatePosition(double latitude, double longitude, Instant timestamp) {
-        setLastLatitude(latitude);
-        setLastLongitude(longitude);
-        this.lastPositionTime = timestamp;
+    public synchronized DeviceSession updateStatus(int signalStrength, boolean isCharging, int batteryLevel) {
+        this.signalStrength = Math.max(0, Math.min(100, signalStrength));
+        this.isCharging = isCharging;
+        this.batteryLevel = Math.max(0, Math.min(100, batteryLevel));
         touch();
+
         return this;
     }
 
     /**
      * Set authentication status
      */
-    public DeviceSession setAuthenticated(boolean authenticated) {
+    public synchronized DeviceSession setAuthenticated(boolean authenticated) {
         this.authenticated = authenticated;
         if (authenticated) {
             touch();
@@ -226,21 +235,53 @@ public class DeviceSession implements Serializable {
     }
 
     /**
-     * Authentication status getter
+     * Update protocol information
      */
-    public boolean isAuthenticated() {
-        return authenticated;
+    public DeviceSession updateProtocolInfo(String version, String model, String firmware) {
+        this.protocolVersion = version;
+        this.deviceModel = model;
+        this.firmwareVersion = firmware;
+        touch();
+        return this;
     }
 
     /**
-     * Check if channel is active and connected
+     * Mark session as disconnected
+     */
+    public synchronized DeviceSession markDisconnected() {
+        this.status = "DISCONNECTED";
+        this.channel = null;
+        touch();
+        return this;
+    }
+
+    /**
+     * Set session status with string (avoids enum issues)
+     */
+    public DeviceSession setStatus(String status) {
+        this.status = status != null ? status : "ACTIVE";
+        touch();
+        return this;
+    }
+
+    // Alternative method for enum compatibility
+    public DeviceSession setStatus(SessionStatus status) {
+        this.status = status != null ? status.name() : "ACTIVE";
+        touch();
+        return this;
+    }
+
+    // === STATUS CHECKS ===
+
+    /**
+     * Check if channel is active and writable
      */
     public boolean isChannelActive() {
         return channel != null && channel.isActive() && channel.isWritable();
     }
 
     /**
-     * Check if session is idle based on last activity
+     * Check if session is idle
      */
     public boolean isIdle(long maxIdleSeconds) {
         if (lastActivityAt == null) return true;
@@ -256,7 +297,7 @@ public class DeviceSession implements Serializable {
     }
 
     /**
-     * Check if session has valid GPS location data
+     * Check if has valid GPS coordinates
      */
     public boolean hasValidLocation() {
         return lastLatitude != null && lastLongitude != null &&
@@ -265,43 +306,30 @@ public class DeviceSession implements Serializable {
     }
 
     /**
-     * Update session status
-     */
-    public DeviceSession setStatus(SessionStatus status) {
-        this.status = status;
-        touch();
-        return this;
-    }
-
-    /**
-     * Check if session is in active status
+     * Check if session is active
      */
     public boolean isActive() {
-        return SessionStatus.ACTIVE.equals(status);
+        return "ACTIVE".equals(status);
     }
 
-    /**
-     * Mark session as disconnected
-     */
-    public DeviceSession markDisconnected() {
-        this.status = SessionStatus.DISCONNECTED;
-        this.channel = null; // Clear transient channel reference
-        touch();
-        return this;
+    // === VALIDATION HELPERS ===
+
+    private static void validateImei(String imei) {
+        if (imei == null || !imei.matches("\\d{15}")) {
+            throw new IllegalArgumentException("IMEI must be exactly 15 digits");
+        }
     }
 
-    /**
-     * Update protocol information
-     */
-    public DeviceSession updateProtocolInfo(String version, String model, String firmware) {
-        this.protocolVersion = version;
-        this.deviceModel = model;
-        this.firmwareVersion = firmware;
-        touch();
-        return this;
+    private static void validateCoordinates(double latitude, double longitude) {
+        if (latitude < -90.0 || latitude > 90.0) {
+            throw new IllegalArgumentException("Latitude must be between -90 and 90 degrees");
+        }
+        if (longitude < -180.0 || longitude > 180.0) {
+            throw new IllegalArgumentException("Longitude must be between -180 and 180 degrees");
+        }
     }
 
-    // Helper Methods
+    // === UTILITY METHODS ===
 
     private static String generateSessionId() {
         return "session_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
@@ -314,39 +342,27 @@ public class DeviceSession implements Serializable {
         return channel.remoteAddress().toString();
     }
 
-    // Session Status Enum
+    // === SESSION STATUS ENUM (for compatibility) ===
 
-    /**
-     * Session status enumeration
-     */
     public enum SessionStatus {
-        /**
-         * Session is active and communicating
-         */
-        ACTIVE,
+        ACTIVE("Session is active and communicating"),
+        INACTIVE("Session is inactive but may reconnect"),
+        DISCONNECTED("Session is disconnected"),
+        EXPIRED("Session has expired due to inactivity"),
+        ERROR("Session encountered an error");
 
-        /**
-         * Session is inactive but may reconnect
-         */
-        INACTIVE,
+        private final String description;
 
-        /**
-         * Session is disconnected
-         */
-        DISCONNECTED,
+        SessionStatus(String description) {
+            this.description = description;
+        }
 
-        /**
-         * Session has expired due to inactivity
-         */
-        EXPIRED,
-
-        /**
-         * Session encountered an error
-         */
-        ERROR
+        public String getDescription() {
+            return description;
+        }
     }
 
-    // Object Methods
+    // === OBJECT METHODS ===
 
     @Override
     public boolean equals(Object obj) {
@@ -364,13 +380,14 @@ public class DeviceSession implements Serializable {
     @Override
     public String toString() {
         return String.format(
-            "DeviceSession{id='%s', imei='%s', authenticated=%s, active=%s, duration=%ds, location=%s}",
+            "DeviceSession{id='%s', imei='%s', authenticated=%s, active=%s, duration=%ds, location=%s, status=%s}",
             id,
             imei != null ? "*".repeat(11) + imei.substring(Math.max(0, imei.length() - 4)) : "null",
             authenticated,
             isChannelActive(),
             getSessionDurationSeconds(),
-            hasValidLocation() ? String.format("[%.6f, %.6f]", lastLatitude, lastLongitude) : "unknown"
+            hasValidLocation() ? String.format("[%.6f, %.6f]", lastLatitude, lastLongitude) : "unknown",
+            status
         );
     }
 }
