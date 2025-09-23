@@ -1,8 +1,9 @@
-package com.wheelseye.devicegateway.protocol.test;
+package com.wheelseye.devicegateway.protocol.gt06.test;
 
 import com.wheelseye.devicegateway.model.DeviceMessage;
-import com.wheelseye.devicegateway.protocol.Gt06FrameDecoder;
-import com.wheelseye.devicegateway.protocol.Gt06ProtocolDecoder;
+import com.wheelseye.devicegateway.protocol.gt06.Gt06FrameDecoder;
+import com.wheelseye.devicegateway.protocol.gt06.Gt06ProtocolDecoder;
+
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;

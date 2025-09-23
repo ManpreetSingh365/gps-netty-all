@@ -1,7 +1,11 @@
-package com.wheelseye.devicegateway.protocol;
+package com.wheelseye.devicegateway.protocol.gt06;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
+
+import com.wheelseye.devicegateway.protocol.Protocol;
+import com.wheelseye.devicegateway.protocol.ProtocolConfig;
+
 import io.netty.channel.ChannelHandler;
 
 /**
@@ -18,9 +22,7 @@ public final class Gt06Protocol implements Protocol {
     private final Gt06ProtocolEncoder protocolEncoder;
     private final ProtocolConfig config;
  
-    public Gt06Protocol(ApplicationContext applicationContext,
-                       Gt06ProtocolDecoder protocolDecoder,
-                       Gt06ProtocolEncoder protocolEncoder) {
+    public Gt06Protocol(ApplicationContext applicationContext, Gt06ProtocolDecoder protocolDecoder, Gt06ProtocolEncoder protocolEncoder) {
         this.applicationContext = applicationContext;
         this.protocolDecoder = protocolDecoder;
         this.protocolEncoder = protocolEncoder;

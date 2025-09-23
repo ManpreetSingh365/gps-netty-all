@@ -1,7 +1,8 @@
 package com.wheelseye.devicegateway.config;
 
-import com.wheelseye.devicegateway.protocol.Gt06Protocol;
 import com.wheelseye.devicegateway.protocol.ProtocolFactory;
+import com.wheelseye.devicegateway.protocol.gt06.Gt06Protocol;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;

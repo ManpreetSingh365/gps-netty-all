@@ -1,4 +1,4 @@
-package com.wheelseye.devicegateway.protocol;
+package com.wheelseye.devicegateway.protocol.gt06;
 
 import com.wheelseye.devicegateway.model.DeviceMessage;
 import io.netty.buffer.ByteBuf;

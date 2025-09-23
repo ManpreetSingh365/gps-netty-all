@@ -7,7 +7,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 @Component
-public class KafkaEventPublisher implements EventPublisher {
+public class KafkaEventPublisher {
 
     private static final Logger logger = LoggerFactory.getLogger(KafkaEventPublisher.class);
 

@@ -53,8 +53,7 @@ public class DeviceMessage {
 
     // Validation methods
     public boolean isValid() {
-        return imei != null && !imei.isBlank() && 
-               protocol != null && type != null && timestamp != null;
+        return imei != null && !imei.isBlank() && protocol != null && type != null && timestamp != null;
     }
 
     public boolean hasLocation() {
