@@ -62,13 +62,27 @@ public class DeviceSessionDto {
     /**
      * Timestamps with proper JSON formatting
      */
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-    private Instant lastPositionTime;
-
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    /** Last activity timestamp in strict ISO format to prevent YearOfEra errors */
+    @JsonFormat(
+        shape   = JsonFormat.Shape.STRING,
+        pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+        timezone= "UTC"
+    )
     private Instant lastActivityAt;
 
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    /** Last position timestamp in strict ISO format */
+    @JsonFormat(
+        shape   = JsonFormat.Shape.STRING,
+        pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+        timezone= "UTC"
+    )
+    private Instant lastPositionTime;
+
+    @JsonFormat(
+        shape   = JsonFormat.Shape.STRING,
+        pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+        timezone= "UTC"
+    )
     private Instant createdAt;
 
     /**

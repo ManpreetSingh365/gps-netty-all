@@ -303,32 +303,6 @@ public class DeviceController {
         }
     }
 
-    // === SERVICE INFORMATION ===
-
-    /**
-     * Get service information
-     */
-    @GetMapping("/info")
-    @Operation(summary = "Get service information", description = "Returns basic service information and version")
-    public ResponseEntity<ServiceInfo> getServiceInfo() {
-        var info = new ServiceInfo(
-                "GPS Device Gateway Service",
-                "2.1.0",
-                "Java 21 + Spring Boot 3.5.5",
-                "Production-Ready GPS Tracking System",
-                Instant.now()
-        );
-        return ResponseEntity.ok(info);
-    }
-
-    /**
-     * Root endpoint
-     */
-    @GetMapping
-    public ResponseEntity<ServiceInfo> getRoot() {
-        return getServiceInfo();
-    }
-
     // === RECORDS (DTOs) ===
 
     /**
@@ -350,17 +324,6 @@ public class DeviceController {
             int authenticatedSessions,
             int unauthenticatedSessions,
             Map<String, Long> protocolBreakdown,
-            Instant timestamp
-    ) {}
-
-    /**
-     * Service information
-     */
-    public record ServiceInfo(
-            String name,
-            String version,
-            String runtime,
-            String description,
             Instant timestamp
     ) {}
 
@@ -400,43 +363,4 @@ public class DeviceController {
             String message,
             Instant timestamp
     ) {}
-
-    /**
-     * Error response
-     */
-    public record ErrorResponse(
-            String code,
-            String message,
-            Instant timestamp
-    ) {}
-
-    // === EXCEPTION HANDLERS ===
-
-    /**
-     * Handle validation errors
-     */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException e) {
-        var error = new ErrorResponse(
-                "INVALID_REQUEST",
-                e.getMessage(),
-                Instant.now()
-        );
-        logger.warn("Validation error: {}", e.getMessage());
-        return ResponseEntity.badRequest().body(error);
-    }
-
-    /**
-     * Handle general exceptions
-     */
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGeneral(Exception e) {
-        logger.error("Unhandled exception in controller", e);
-        var error = new ErrorResponse(
-                "INTERNAL_ERROR",
-                "An internal error occurred",
-                Instant.now()
-        );
-        return ResponseEntity.internalServerError().body(error);
-    }
 }

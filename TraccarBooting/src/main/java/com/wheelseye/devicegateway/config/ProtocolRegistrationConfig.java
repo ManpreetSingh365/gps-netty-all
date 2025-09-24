@@ -40,6 +40,8 @@ public class ProtocolRegistrationConfig {
         try {
             // Register GT06 protocol
             protocolFactory.register(gt06Protocol);
+            // protocolFactory.register(gt06NProtocol);
+            // protocolFactory.register(OBDProtocol);
             
             // Log successful registration
             var registeredProtocols = protocolFactory.getRegisteredProtocols();
@@ -71,8 +73,7 @@ public class ProtocolRegistrationConfig {
             
             try {
                 protocolFactory.register(gt06Protocol);
-                logger.info("🚨 Emergency protocol registration successful: {}", 
-                    protocolFactory.getRegisteredProtocols());
+                logger.info("🚨 Emergency protocol registration successful: {}", protocolFactory.getRegisteredProtocols());
             } catch (Exception e) {
                 logger.error("💥 Emergency protocol registration failed", e);
             }
