@@ -48,64 +48,6 @@ public class CommandController {
     /**
      * Engine Cut Off Command - DYD#
      */
-    // @PostMapping("/engine/cut-off")
-    // @Operation(summary = "Cut off engine (DYD)", description = "Send DYD command
-    // to cut off vehicle engine/power")
-    // @ApiResponses({
-    // @ApiResponse(responseCode = "200", description = "Command queued
-    // successfully"),
-    // @ApiResponse(responseCode = "400", description = "Invalid request
-    // parameters"),
-    // @ApiResponse(responseCode = "404", description = "Device not connected"),
-    // @ApiResponse(responseCode = "500", description = "Command processing failed")
-    // })
-    // public CompletableFuture<ResponseEntity<CommandResponse>> cutOffEngine(
-    // @Parameter(description = "Device IMEI (15 digits)", required = true)
-    // @RequestParam @Pattern(regexp = "\\\\d{15}", message = "IMEI must be 15
-    // digits") String deviceId,
-
-    // @Parameter(description = "Device password (optional)")
-    // @RequestParam(required = false) String password,
-
-    // @Parameter(description = "Server identification flag")
-    // @RequestParam(defaultValue = "1") int serverFlag) {
-
-    // log.info("Engine cut-off requested for device: {}", deviceId);
-
-    // CommandRequest request = CommandRequest.builder()
-    // .deviceId(deviceId)
-    // .command("DYD#")
-    // .password(password)
-    // .serverFlag(serverFlag)
-    // .commandType("ENGINE_CUT_OFF")
-    // .requestedAt(Instant.now())
-    // .expectedResponse("DYD=Success!")
-    // .build();
-
-    // return commandService.sendCommand(request)
-    // .thenApply(response -> {
-    // if (response.isSuccess()) {
-    // log.info("✅ Engine cut-off command queued for device: {}, commandId: {}",
-    // deviceId, response.getCommandId());
-    // return ResponseEntity.ok(response);
-    // } else {
-    // log.error("❌ Engine cut-off failed for device: {}: {}", deviceId,
-    // response.getMessage());
-    // return ResponseEntity.badRequest().body(response);
-    // }
-    // })
-    // .exceptionally(throwable -> {
-    // log.error("❌ Engine cut-off processing failed for device: {}", deviceId,
-    // throwable);
-    // return ResponseEntity.internalServerError()
-    // .body(CommandResponse.error("Internal processing error: " +
-    // throwable.getMessage()));
-    // });
-    // }
-
-    /**
-     * Engine Cut Off Command - DYD#
-     */
     @PostMapping("/engine/cut-off")
     @Operation(summary = "Cut off engine (DYD)", description = "Send DYD command to cut off vehicle engine/power")
     @ApiResponses({
@@ -152,35 +94,6 @@ public class CommandController {
     /**
      * Engine Restore Command - HFYD#
      */
-    // @PostMapping("/engine/restore")
-    // @Operation(summary = "Restore engine (HFYD)", description = "Send HFYD
-    // command to restore vehicle engine/power")
-    // public CompletableFuture<ResponseEntity<CommandResponse>> restoreEngine(
-    // @RequestParam @Pattern(regexp = "\\\\d{15}") String deviceId,
-    // @RequestParam(required = false) String password,
-    // @RequestParam(defaultValue = "1") int serverFlag) {
-
-    // log.info("Engine restore requested for device: {}", deviceId);
-
-    // CommandRequest request = CommandRequest.builder()
-    // .deviceId(deviceId)
-    // .command("HFYD#")
-    // .password(password)
-    // .serverFlag(serverFlag)
-    // .commandType("ENGINE_RESTORE")
-    // .requestedAt(Instant.now())
-    // .expectedResponse("HFYD=Success!")
-    // .build();
-
-    // return commandService.sendCommand(request)
-    // .thenApply(ResponseEntity::ok)
-    // .exceptionally(throwable -> ResponseEntity.internalServerError()
-    // .body(CommandResponse.error("Command failed: " + throwable.getMessage())));
-    // }
-
-    /**
-     * Engine Restore Command - HFYD#
-     */
     @PostMapping("/engine/restore")
     @Operation(summary = "Restore engine (HFYD)", description = "Send HFYD command to restore vehicle engine/power")
     public CompletableFuture<ResponseEntity<CommandResponse>> restoreEngine(
@@ -212,7 +125,7 @@ public class CommandController {
     @PostMapping("/location/request")
     @Operation(summary = "Request location (DWXX)", description = "Send DWXX command to request current location")
     public CompletableFuture<ResponseEntity<CommandResponse>> requestLocation(
-            @RequestParam @Pattern(regexp = "\\\\d{15}") String deviceId,
+            @RequestParam String deviceId,
             @RequestParam(required = false) String password,
             @RequestParam(defaultValue = "1") int serverFlag) {
 
@@ -240,7 +153,7 @@ public class CommandController {
     @PostMapping("/device/reset")
     @Operation(summary = "Reset device (RESET)", description = "Send RESET command to reboot device")
     public CompletableFuture<ResponseEntity<CommandResponse>> resetDevice(
-            @RequestParam @Pattern(regexp = "\\\\d{15}") String deviceId,
+            @RequestParam String deviceId,
             @RequestParam(required = false) String password,
             @RequestParam(defaultValue = "1") int serverFlag) {
 
@@ -268,7 +181,7 @@ public class CommandController {
     @PostMapping("/device/status")
     @Operation(summary = "Query status (STATUS)", description = "Send STATUS command to query device status")
     public CompletableFuture<ResponseEntity<CommandResponse>> queryStatus(
-            @RequestParam @Pattern(regexp = "\\\\d{15}") String deviceId,
+            @RequestParam String deviceId,
             @RequestParam(defaultValue = "1") int serverFlag) {
 
         log.info("Status query for device: {}", deviceId);
@@ -294,7 +207,7 @@ public class CommandController {
     @PostMapping("/config/timer")
     @Operation(summary = "Configure timer (TIMER)", description = "Configure GPS data upload intervals")
     public CompletableFuture<ResponseEntity<CommandResponse>> configureTimer(
-            @RequestParam @Pattern(regexp = "\\\\d{15}") String deviceId,
+            @RequestParam String deviceId,
             @RequestParam(required = false) String password,
             @RequestParam(defaultValue = "1") int serverFlag,
 
@@ -329,7 +242,7 @@ public class CommandController {
     @PostMapping("/config/server")
     @Operation(summary = "Configure server (SERVER)", description = "Update server IP and port settings")
     public CompletableFuture<ResponseEntity<CommandResponse>> configureServer(
-            @RequestParam @Pattern(regexp = "\\\\d{15}") String deviceId,
+            @RequestParam String deviceId,
             @RequestParam(required = false) String password,
             @RequestParam(defaultValue = "1") int serverFlag,
             @RequestParam String serverIp,
@@ -382,7 +295,7 @@ public class CommandController {
     @GetMapping("/device/{deviceId}/history")
     @Operation(summary = "Get command history", description = "Retrieve command history for device")
     public ResponseEntity<List<CommandStatus>> getCommandHistory(
-            @PathVariable @Pattern(regexp = "\\\\d{15}") String deviceId,
+            @PathVariable String deviceId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
@@ -409,7 +322,7 @@ public class CommandController {
     @GetMapping("/device/{deviceId}/pending")
     @Operation(summary = "Get pending commands", description = "Get count of pending commands for device")
     public ResponseEntity<PendingCommandsInfo> getPendingCommands(
-            @PathVariable @Pattern(regexp = "\\\\d{15}") String deviceId) {
+            @PathVariable String deviceId) {
 
         try {
             long pendingCount = commandService.getPendingCommandsCount(deviceId);

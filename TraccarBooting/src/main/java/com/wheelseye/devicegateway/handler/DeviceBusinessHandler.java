@@ -1,6 +1,7 @@
 package com.wheelseye.devicegateway.handler;
 
 import com.wheelseye.devicegateway.model.DeviceMessage;
+import com.wheelseye.devicegateway.service.ChannelManagerService;
 import com.wheelseye.devicegateway.service.CommandService;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 import io.netty.channel.ChannelHandler;
@@ -42,17 +43,19 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
     private final DeviceSessionService sessionService;
     private final CommandService commandService;
 
+    @Autowired
+    private ChannelManagerService channelManagerService;
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DeviceMessage message) {
         // Process messages asynchronously to avoid blocking the event loop
         CompletableFuture.runAsync(() -> processMessage(ctx, message))
-            .exceptionally(throwable -> {
-                log.error("❌ Error processing message from {}: {}", 
-                         ctx.channel().remoteAddress(), throwable.getMessage(), throwable);
-                sendErrorResponse(ctx);
-                return null;
-            });
+                .exceptionally(throwable -> {
+                    log.error("❌ Error processing message from {}: {}",
+                            ctx.channel().remoteAddress(), throwable.getMessage(), throwable);
+                    sendErrorResponse(ctx);
+                    return null;
+                });
     }
 
     /**
@@ -73,8 +76,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             }
 
         } catch (Exception e) {
-            log.error("❌ Error processing {} from {}: {}", 
-                     message.type(), ctx.channel().remoteAddress(), e.getMessage(), e);
+            log.error("❌ Error processing {} from {}: {}",
+                    message.type(), ctx.channel().remoteAddress(), e.getMessage(), e);
             sendErrorResponse(ctx);
         }
     }
@@ -85,7 +88,7 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
     private void handleLogin(ChannelHandlerContext ctx, DeviceMessage message) {
         try {
             String imei = message.imei();
-            log.info("🔐 Processing login for device: {} from {}", 
+            log.info("🔐 Processing login for device: {} from {}",
                     imei, ctx.channel().remoteAddress());
 
             // Create or update session using the correct service method
@@ -104,11 +107,14 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             // Configure device reporting interval
             configureDevice(ctx, imei);
 
+            // ADD THIS LINE: Register active channel
+            channelManagerService.registerChannel(imei, ctx.channel());
+
             log.info("✅ Device {} logged in, session: {}", imei, session.getId());
 
         } catch (Exception e) {
-            log.error("❌ Login failed for {} from {}: {}", 
-                     message.imei(), ctx.channel().remoteAddress(), e.getMessage(), e);
+            log.error("❌ Login failed for {} from {}: {}",
+                    message.imei(), ctx.channel().remoteAddress(), e.getMessage(), e);
             ctx.close();
         }
     }
@@ -133,12 +139,11 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
 
                 // Log GPS information with Google Maps link
                 log.info(
-                    "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
-                    imei,
-                    String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
-                    String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
-                    speed, course, latitude, longitude
-                );
+                        "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
+                        imei,
+                        String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
+                        String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
+                        speed, course, latitude, longitude);
             } else {
                 log.warn("⚠️ Invalid location from {}: lat={}, lon={}", imei, latitude, longitude);
             }
@@ -147,8 +152,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             sendLocationAck(ctx);
 
         } catch (Exception e) {
-            log.error("❌ Error processing location from {}: {}", 
-                     message.imei(), e.getMessage(), e);
+            log.error("❌ Error processing location from {}: {}",
+                    message.imei(), e.getMessage(), e);
             sendErrorResponse(ctx);
         }
     }
@@ -165,23 +170,23 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             var alarmStatus = message.alarmStatus().orElse(0);
 
             if (alarmStatus != 0) {
-                log.warn("🚨 ALARM from {}: status=0x{:02X} at [{}, {}]", 
+                log.warn("🚨 ALARM from {}: status=0x{:02X} at [{}, {}]",
                         imei, alarmStatus,
-                        message.latitude().orElse(0.0), 
+                        message.latitude().orElse(0.0),
                         message.longitude().orElse(0.0));
 
                 // Update session status with alarm information
                 sessionService.updateStatusAsync(imei, 0, false, 0)
-                    .whenComplete((result, throwable) -> {
-                        if (throwable != null) {
-                            log.warn("⚠️ Failed to update alarm status: {}", throwable.getMessage());
-                        }
-                    });
+                        .whenComplete((result, throwable) -> {
+                            if (throwable != null) {
+                                log.warn("⚠️ Failed to update alarm status: {}", throwable.getMessage());
+                            }
+                        });
             }
 
         } catch (Exception e) {
-            log.error("❌ Error processing alarm from {}: {}", 
-                     message.imei(), e.getMessage(), e);
+            log.error("❌ Error processing alarm from {}: {}",
+                    message.imei(), e.getMessage(), e);
             sendErrorResponse(ctx);
         }
     }
@@ -203,49 +208,49 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
 
             // Update device status asynchronously
             sessionService.updateStatusAsync(imei, gsmSignal, charging, voltage)
-                .whenComplete((result, throwable) -> {
-                    if (throwable != null) {
-                        log.warn("⚠️ Failed to update device status: {}", throwable.getMessage());
-                    }
-                });
+                    .whenComplete((result, throwable) -> {
+                        if (throwable != null) {
+                            log.warn("⚠️ Failed to update device status: {}", throwable.getMessage());
+                        }
+                    });
 
-            log.debug("💓 Heartbeat from {}: charging={}, gsm={}, voltage={}", 
-                     imei, charging, gsmSignal, voltage);
+            log.debug("💓 Heartbeat from {}: charging={}, gsm={}, voltage={}",
+                    imei, charging, gsmSignal, voltage);
 
             // Send heartbeat acknowledgment
             sendHeartbeatAck(ctx);
 
         } catch (Exception e) {
-            log.error("❌ Error processing heartbeat from {}: {}", 
-                     message.imei(), e.getMessage(), e);
+            log.error("❌ Error processing heartbeat from {}: {}",
+                    message.imei(), e.getMessage(), e);
             sendErrorResponse(ctx);
         }
     }
-    
+
     /**
      * Handle string messages from device
      * MODIFIED: Enhanced handleString method to process command responses
-    */
+     */
     private void handleString(ChannelHandlerContext ctx, DeviceMessage message) {
         try {
             String imei = message.imei();
             var content = message.getData("content", String.class).orElse("");
             log.info("📝 String message from {}: {}", imei, content);
-            
+
             // NEW: Process as potential command response
             if (isCommandResponse(content)) {
                 commandService.processCommandResponse(imei, content);
                 log.info("🔄 Processed command response from {}: {}", imei, content);
             }
-            
+
             // Touch session to update activity
             sessionService.touchSession(imei);
-            
+
             // Send generic acknowledgment
             sendGenericAck(ctx);
-            
+
         } catch (Exception e) {
-            log.error("❌ Error processing string from {}: {}", 
+            log.error("❌ Error processing string from {}: {}",
                     message.imei(), e.getMessage(), e);
             sendErrorResponse(ctx);
         }
@@ -255,14 +260,14 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
      * NEW: Check if string message is a command response
      */
     private boolean isCommandResponse(String content) {
-        return content.startsWith("DYD=") || 
-            content.startsWith("HFYD=") || 
-            content.startsWith("DWXX=") || 
-            content.startsWith("RESET") || 
-            content.startsWith("Battery:") ||
-            content.startsWith("TIMER") ||
-            content.startsWith("SERVER");
-    } 
+        return content.startsWith("DYD=") ||
+                content.startsWith("HFYD=") ||
+                content.startsWith("DWXX=") ||
+                content.startsWith("RESET") ||
+                content.startsWith("Battery:") ||
+                content.startsWith("TIMER") ||
+                content.startsWith("SERVER");
+    }
 
     /**
      * Handle address request messages
@@ -281,8 +286,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             sessionService.touchSession(imei);
 
         } catch (Exception e) {
-            log.error("❌ Error processing address request from {}: {}", 
-                     message.imei(), e.getMessage(), e);
+            log.error("❌ Error processing address request from {}: {}",
+                    message.imei(), e.getMessage(), e);
             sendErrorResponse(ctx);
         }
     }
@@ -320,7 +325,7 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
                     ctx.channel().attr(CONFIGURED_ATTR).set(true);
                     log.info("📡 Configuration sent to {}: 30s reporting", imei);
                 } else {
-                    log.warn("⚠️ Failed to configure device {}: {}", 
+                    log.warn("⚠️ Failed to configure device {}: {}",
                             imei, future.cause() != null ? future.cause().getMessage() : "Unknown error");
                 }
             });
@@ -336,35 +341,36 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
      * Send login acknowledgment
      */
     private void sendLoginAck(ChannelHandlerContext ctx) {
-        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x01, (byte)0xD9, (byte)0xDC, 0x0D, 0x0A});
+        sendResponse(ctx, new byte[] { 0x78, 0x78, 0x05, 0x01, 0x00, 0x01, (byte) 0xD9, (byte) 0xDC, 0x0D, 0x0A });
     }
 
     /**
      * Send location acknowledgment
      */
     private void sendLocationAck(ChannelHandlerContext ctx) {
-        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x02, (byte)0xD9, (byte)0xDD, 0x0D, 0x0A});
+        sendResponse(ctx, new byte[] { 0x78, 0x78, 0x05, 0x01, 0x00, 0x02, (byte) 0xD9, (byte) 0xDD, 0x0D, 0x0A });
     }
 
     /**
      * Send heartbeat acknowledgment
      */
     private void sendHeartbeatAck(ChannelHandlerContext ctx) {
-        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x03, (byte)0xD9, (byte)0xDE, 0x0D, 0x0A});
+        sendResponse(ctx, new byte[] { 0x78, 0x78, 0x05, 0x01, 0x00, 0x03, (byte) 0xD9, (byte) 0xDE, 0x0D, 0x0A });
     }
 
     /**
      * Send generic acknowledgment
      */
     private void sendGenericAck(ChannelHandlerContext ctx) {
-        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, 0x00, 0x00, (byte)0xD9, (byte)0xDB, 0x0D, 0x0A});
+        sendResponse(ctx, new byte[] { 0x78, 0x78, 0x05, 0x01, 0x00, 0x00, (byte) 0xD9, (byte) 0xDB, 0x0D, 0x0A });
     }
 
     /**
      * Send error response
      */
     private void sendErrorResponse(ChannelHandlerContext ctx) {
-        sendResponse(ctx, new byte[]{0x78, 0x78, 0x05, 0x01, (byte)0xFF, (byte)0xFF, (byte)0xD8, (byte)0xDA, 0x0D, 0x0A});
+        sendResponse(ctx,
+                new byte[] { 0x78, 0x78, 0x05, 0x01, (byte) 0xFF, (byte) 0xFF, (byte) 0xD8, (byte) 0xDA, 0x0D, 0x0A });
     }
 
     /**
@@ -376,8 +382,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             buffer.writeBytes(response);
             ctx.writeAndFlush(buffer);
         } catch (Exception e) {
-            log.error("❌ Failed to send response to {}: {}", 
-                     ctx.channel().remoteAddress(), e.getMessage(), e);
+            log.error("❌ Failed to send response to {}: {}",
+                    ctx.channel().remoteAddress(), e.getMessage(), e);
         }
     }
 
@@ -397,6 +403,10 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             try {
                 // Remove session using the correct service method
                 sessionService.removeSession(ctx.channel());
+
+                // ADD THIS LINE: Unregister channel
+                channelManagerService.unregisterChannel(imei);
+            
             } catch (Exception e) {
                 log.error("❌ Error removing session: {}", e.getMessage(), e);
             }
@@ -415,8 +425,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
         var imei = ctx.channel().attr(IMEI_ATTR).get();
         var maskedImei = imei != null ? maskImei(imei) : "UNKNOWN";
 
-        log.error("❌ Handler exception for {} from {}: {}", 
-                 maskedImei, ctx.channel().remoteAddress(), cause.getMessage(), cause);
+        log.error("❌ Handler exception for {} from {}: {}",
+                maskedImei, ctx.channel().remoteAddress(), cause.getMessage(), cause);
 
         // Close the channel on exception
         ctx.close();
