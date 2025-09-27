@@ -2,6 +2,14 @@ server:
   port: ${SERVER_PORT:8081}
   address: 0.0.0.0
 
+gt06:
+  commands:
+    default-server-flag: 1
+    default-timeout-seconds: 30
+    max-retries: 3
+    cleanup-interval-minutes: 60
+    enable-command-history: true
+    
 # Device Gateway Service - Kafka + Redis Configuration
 spring:
   application:

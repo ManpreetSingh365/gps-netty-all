@@ -218,7 +218,7 @@ public class DeviceSessionService {
 
                 sessionRepository.save(session);
 
-                log.debug("📍 Updated position for {}: [{:.6f}, {:.6f}]", imei, latitude, longitude);
+                log.debug("📍 Updated position for {}: [{}, {}]", imei, latitude, longitude);
                 return true;
 
             } catch (Exception e) {

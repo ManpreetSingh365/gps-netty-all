@@ -1,6 +1,7 @@
 package com.wheelseye.devicegateway.handler;
 
 import com.wheelseye.devicegateway.model.DeviceMessage;
+import com.wheelseye.devicegateway.service.CommandService;
 import com.wheelseye.devicegateway.service.DeviceSessionService;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -8,6 +9,8 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.AttributeKey;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -37,6 +40,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
     private static final AttributeKey<Boolean> CONFIGURED_ATTR = AttributeKey.valueOf("DEVICE_CONFIGURED");
 
     private final DeviceSessionService sessionService;
+    private final CommandService commandService;
+
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DeviceMessage message) {
@@ -216,29 +221,48 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             sendErrorResponse(ctx);
         }
     }
-
+    
     /**
      * Handle string messages from device
-     */
+     * MODIFIED: Enhanced handleString method to process command responses
+    */
     private void handleString(ChannelHandlerContext ctx, DeviceMessage message) {
         try {
             String imei = message.imei();
             var content = message.getData("content", String.class).orElse("");
-
             log.info("📝 String message from {}: {}", imei, content);
-
+            
+            // NEW: Process as potential command response
+            if (isCommandResponse(content)) {
+                commandService.processCommandResponse(imei, content);
+                log.info("🔄 Processed command response from {}: {}", imei, content);
+            }
+            
             // Touch session to update activity
             sessionService.touchSession(imei);
-
+            
             // Send generic acknowledgment
             sendGenericAck(ctx);
-
+            
         } catch (Exception e) {
             log.error("❌ Error processing string from {}: {}", 
-                     message.imei(), e.getMessage(), e);
+                    message.imei(), e.getMessage(), e);
             sendErrorResponse(ctx);
         }
     }
+
+    /**
+     * NEW: Check if string message is a command response
+     */
+    private boolean isCommandResponse(String content) {
+        return content.startsWith("DYD=") || 
+            content.startsWith("HFYD=") || 
+            content.startsWith("DWXX=") || 
+            content.startsWith("RESET") || 
+            content.startsWith("Battery:") ||
+            content.startsWith("TIMER") ||
+            content.startsWith("SERVER");
+    } 
 
     /**
      * Handle address request messages
