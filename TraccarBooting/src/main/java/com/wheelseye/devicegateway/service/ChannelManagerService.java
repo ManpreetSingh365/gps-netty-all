@@ -91,49 +91,49 @@ public class ChannelManagerService {
 
     /**
      * CORRECTED: Send GT06 command using DeviceMessage (not raw String)
+     * Service Layer → prepares DeviceMessage and finds Channel
      */
-    public boolean sendGT06Command(String imei, String commandType, String command,
-            String password, int serverFlag) {
+    public boolean sendGT06Command(String imei, String commandType, String command, String password, int serverFlag) {
+
         Optional<Channel> channelOpt = getActiveChannel(imei);
 
-        if (channelOpt.isPresent()) {
-            Channel channel = channelOpt.get();
-            try {
-                // FIXED: Create DeviceMessage for GT06 encoder
-                Map<String, Object> data = new HashMap<>();
-                data.put("command", command);
-                data.put("password", password);
-                data.put("serverFlag", serverFlag);
-                data.put("useEnglish", true);
-
-                DeviceMessage deviceMessage = DeviceMessage.builder()
-                        .imei(imei)
-                        .type(commandType) // "engine_cut_off" or "engine_restore"
-                        .timestamp(Instant.now())
-                        .data(data)
-                        .build();
-
-                log.info("deviceMessage: {}", deviceMessage); 
-
-                // FIXED: Send DeviceMessage (not String) - goes through GT06 encoder
-                channel.writeAndFlush(deviceMessage)
-                        .addListener(future -> {
-                            if (future.isSuccess()) {
-                                log.info("✅ GT06 command sent successfully to {}: {} ({})",
-                                        imei, commandType, command);
-                            } else {
-                                log.error("❌ Failed to send GT06 command to {}: {}",
-                                        imei, future.cause().getMessage());
-                            }
-                        });
-                return true;
-
-            } catch (Exception e) {
-                log.error("❌ Error sending GT06 command to {}: {}", imei, e.getMessage(), e);
-                return false;
-            }
-        } else {
+        if (channelOpt.isEmpty()) {
             log.warn("❌ No active channel found for device: {}", imei);
+            return false;
+        }
+
+        Channel channel = channelOpt.get();
+
+        try {
+            // Prepare DeviceMessage (business layer representation)
+            Map<String, Object> data = new HashMap<>();
+            data.put("command", command);
+            data.put("password", password);
+            data.put("serverFlag", serverFlag);
+            data.put("useEnglish", true);
+
+            DeviceMessage deviceMessage = DeviceMessage.builder()
+                    .imei(imei)
+                    .type(commandType) // "engine_cut_off" or "engine_restore"
+                    .timestamp(Instant.now())
+                    .data(data)
+                    .build();
+            log.debug("Prepared DeviceMessage for {}: {}", imei, deviceMessage);
+
+            // 🔥 Send DeviceMessage through Netty (will hit encoder pipeline)
+            channel.writeAndFlush(deviceMessage).addListener(future -> {
+                if (future.isSuccess()) {
+                    log.info("✅ GT06 command sent to {}: {} ({})", imei, commandType, command);
+                } else {
+                    log.error("❌ Failed to send GT06 command to {}: {}",
+                            imei, future.cause().getMessage());
+                }
+            });
+
+            return true;
+
+        } catch (Exception e) {
+            log.error("❌ Error sending GT06 command to {}: {}", imei, e.getMessage(), e);
             return false;
         }
     }

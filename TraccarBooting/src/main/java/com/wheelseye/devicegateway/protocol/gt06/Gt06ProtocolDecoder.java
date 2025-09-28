@@ -149,14 +149,14 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
             parseStatusInfo(content, data);
         }
         
-        log.info(
-            "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
-            imei,
-            String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
-            String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
-            speedRaw, satelliteCount,
-            latitude, longitude
-        );
+        // log.info(
+        //     "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
+        //     imei,
+        //     String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
+        //     String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
+        //     speedRaw, satelliteCount,
+        //     latitude, longitude
+        // );
 
         return DeviceMessage.builder()
                 .imei(imei)

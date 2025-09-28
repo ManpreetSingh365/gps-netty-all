@@ -41,6 +41,10 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      acks: 1
+      retries: 2
+      batch-size: 16384
+      linger-ms: 5
     listener:
       ack-mode: MANUAL_IMMEDIATE
 
@@ -87,10 +91,8 @@ device-gateway:
 
   kafka:
     topics:
-      device-sessions: device.sessions
-      device-location: location.device
-      telemetry-inbound: telemetry.inbound
-      commands-outbound: commands.outbound
+      device-location: device.location
+      device-info: device.info
 
   session:
     cleanup-interval: ${DEVICE_GATEWAY_SESSION_CLEANUP_INTERVAL:300000}  # FIXED: 5 minutes instead of 60s

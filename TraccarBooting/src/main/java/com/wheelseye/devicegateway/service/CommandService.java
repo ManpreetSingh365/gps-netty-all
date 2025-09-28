@@ -24,8 +24,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * Works with existing DeviceSessionService and DeviceMessage model
  * Provides async command processing with proper session management
  * 
- * @author WheelsEye Team
- * @version 1.0 - Integrated Implementation
+ * Service (sendGT06Command)
+ * ⬇️ DeviceMessage
+ * ⬇️ Netty pipeline
+ * ⬇️ Encoder (encodeGt06Command → encodeOfficialGt06Command)
+ * ⬇️ ByteBuf (GT06 packet)
+ * ⬇️ TCP write
+ * ⬇️ Device
  */
 @Slf4j
 @Service
@@ -47,7 +52,8 @@ public class CommandService {
     public CompletableFuture<CommandResponse> sendCommand(CommandRequest request) {
         String commandId = UUID.randomUUID().toString();
 
-        log.info("Processing GT06 command {} for device {}: {}", commandId, request.getDeviceId(), request.getCommandType());
+        log.info("Processing GT06 command {} for device {}: {}", commandId, request.getDeviceId(),
+                request.getCommandType());
 
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -62,7 +68,9 @@ public class CommandService {
                 }
 
                 var session = sessionOpt.get();
-                log.info("Found session for device {}: status={}, Channel={}, createdAt={}, lastActivityAt={}", request.getDeviceId(), session.getStatus(), session.getChannel(), session.getCreatedAt(), session.getLastActivityAt());
+                log.info("Found session for device {}: status={}, Channel={}, createdAt={}, lastActivityAt={}",
+                        request.getDeviceId(), session.getStatus(), session.getChannel(), session.getCreatedAt(),
+                        session.getLastActivityAt());
 
                 // STEP 2: Validate session is active
                 if (!session.isActive()) {
@@ -71,18 +79,20 @@ public class CommandService {
 
                 // STEP 3: Validate session is not idle
                 // if (session.isIdle(900)) { // 15 minutes
-                //     return handleCommandFailure(status, "Device session is idle");
+                // return handleCommandFailure(status, "Device session is idle");
                 // }
 
                 // STEP 4: CORRECTED - Send using DeviceMessage format
                 String commandString = buildGT06Command(request);
                 log.info("Built GT06 command string: {}", commandString);
-                String commandType = mapCommandTypeForEncoder(request.getCommandType());
+
+                String commandType = mapCommandTypeToMessageType(request.getCommandType());
                 log.info("Mapped command type for encoder: {}", commandType);
 
-                boolean sent = channelManagerService.sendGT06Command(request.getDeviceId(),commandType,commandString,request.getPassword(),request.getServerFlag());
+                boolean sent = channelManagerService.sendGT06Command(request.getDeviceId(), commandType, commandString,
+                        request.getPassword(), request.getServerFlag());
                 log.info("Command send result: {}", sent);
-                
+
                 if (sent) {
                     status.setStatus("SENT");
                     status.setSentAt(Instant.now());
@@ -101,22 +111,6 @@ public class CommandService {
                 return CommandResponse.error("Command processing failed: " + e.getMessage());
             }
         });
-    }
-
-    /**
-     * CORRECTED: Map command types to encoder message types
-     */
-    private String mapCommandTypeForEncoder(String commandType) {
-        return switch (commandType) {
-            case "ENGINE_CUT_OFF" -> "engine_cut_off";
-            case "ENGINE_RESTORE" -> "engine_restore";
-            case "LOCATION_REQUEST" -> "location_request";
-            case "DEVICE_RESET" -> "device_reset";
-            case "STATUS_QUERY" -> "status_query";
-            case "TIMER_CONFIG" -> "timer_config";
-            case "SERVER_CONFIG" -> "server_config";
-            default -> "gt06_command";
-        };
     }
 
     /**
@@ -139,22 +133,22 @@ public class CommandService {
      * FIXED: Build GT06 SMS format command
      */
     // private String buildGT06SMSCommand(CommandRequest request) {
-    //     String baseCommand = request.getCommand();
+    // String baseCommand = request.getCommand();
 
-    //     log.info("Building GT06 SMS command: baseCommand='{}', password='{}'",
-    //             baseCommand, request.getPassword());
+    // log.info("Building GT06 SMS command: baseCommand='{}', password='{}'",
+    // baseCommand, request.getPassword());
 
-    //     // Remove # if present (we'll add it back)
-    //     if (baseCommand.endsWith("#")) {
-    //         baseCommand = baseCommand.substring(0, baseCommand.length() - 1);
-    //     }
+    // // Remove # if present (we'll add it back)
+    // if (baseCommand.endsWith("#")) {
+    // baseCommand = baseCommand.substring(0, baseCommand.length() - 1);
+    // }
 
-    //     // Add password if provided
-    //     if (request.getPassword() != null && !request.getPassword().isEmpty()) {
-    //         return baseCommand + "," + request.getPassword() + "#";
-    //     }
+    // // Add password if provided
+    // if (request.getPassword() != null && !request.getPassword().isEmpty()) {
+    // return baseCommand + "," + request.getPassword() + "#";
+    // }
 
-    //     return baseCommand + "#";
+    // return baseCommand + "#";
     // }
 
     /**

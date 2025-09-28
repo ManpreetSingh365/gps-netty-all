@@ -87,7 +87,10 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
     @Override
     protected void encode(ChannelHandlerContext ctx, DeviceMessage message, ByteBuf out) throws Exception {
         try {
+            log.info("📤 ===> Encoding message type: {} for device: {}", message.type(), message.imei());
+
             switch (message.type().toLowerCase()) {
+                
                 // Existing response handling (maintain compatibility)
                 case "login_ack" -> encodeLoginResponse(message, out);
                 case "gps_ack" -> encodeGpsResponse(message, out);
@@ -135,7 +138,7 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
         }
         
         encodeOfficialGt06Command(out, command, password, serverFlag, useEnglish);
-        log.info("📡 Sent GT06 command to device {}: {}", message.imei(), command);
+        log.info("encodeGt06Command: 📡 Sent GT06 command to device {}: {}", message.imei(), command);
     }
 
     /**
@@ -146,12 +149,10 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
         var password = getStringValue(data, "password", null);
         var serverFlag = getIntValue(data, "serverFlag", 1);
         
-        String command = password != null ? 
-            String.format("%s,%s#", commandPrefix, password) : 
-            commandPrefix + "#";
+        String command = password != null ? String.format("%s,%s#", commandPrefix, password) : commandPrefix + "#";
             
         encodeOfficialGt06Command(out, command, null, serverFlag, true);
-        log.info("📡 Sent {} command to device {}: {}", commandPrefix, message.imei(), command);
+        log.info("encodeEngineCommand: 📡 Sent {} command to device {}: {}", commandPrefix, message.imei(), command);
     }
 
     /**
@@ -166,7 +167,7 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
             String.format("DWXX,%s#", password) : "DWXX#";
             
         encodeOfficialGt06Command(out, command, null, serverFlag, true);
-        log.info("📡 Sent location request to device {}: {}", message.imei(), command);
+        log.info("encodeLocationRequest: 📡 Sent location request to device {}: {}", message.imei(), command);
     }
 
     /**
@@ -181,7 +182,7 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
             String.format("RESET,%s#", password) : "RESET#";
             
         encodeOfficialGt06Command(out, command, null, serverFlag, true);
-        log.info("📡 Sent reset command to device {}: {}", message.imei(), command);
+        log.info("encodeDeviceReset: 📡 Sent reset command to device {}: {}", message.imei(), command);
     }
 
     /**
@@ -192,7 +193,7 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
         var serverFlag = getIntValue(data, "serverFlag", 1);
         
         encodeOfficialGt06Command(out, "STATUS#", null, serverFlag, true);
-        log.info("📡 Sent status query to device {}", message.imei());
+        log.info("encodeStatusQuery: 📡 Sent status query to device {}", message.imei());
     }
 
     /**
@@ -211,7 +212,7 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
         }
         
         encodeOfficialGt06Command(out, command, null, serverFlag, true);
-        log.info("📡 Sent timer config to device {}: ACC_ON={}s, ACC_OFF={}s", 
+        log.info("encodeTimerConfig: 📡 Sent timer config to device {}: ACC_ON={}s, ACC_OFF={}s", 
                 message.imei(), accOnInterval, accOffInterval);
     }
 
@@ -236,15 +237,14 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
         }
         
         encodeOfficialGt06Command(out, command, null, serverFlag, true);
-        log.info("📡 Sent server config to device {}: {}:{}", message.imei(), serverIp, serverPort);
+        log.info("encodeServerConfig: 📡 Sent server config to device {}: {}:{}", message.imei(), serverIp, serverPort);
     }
 
     /**
      * CORE: Official GT06 command encoding with proper packet structure
      * [Start][Length][Protocol][CmdLen][ServerFlag][Command][Language][Serial][CRC][Stop]
      */
-    private void encodeOfficialGt06Command(ByteBuf out, String command, String password, 
-                                         int serverFlag, boolean useEnglish) {
+    private void encodeOfficialGt06Command(ByteBuf out, String command, String password, int serverFlag, boolean useEnglish) {
         try {
             // Prepare command content (password already embedded if needed)
             byte[] commandBytes = command.getBytes(StandardCharsets.US_ASCII);
@@ -254,8 +254,7 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
             int commandLength = 4 + commandBytes.length + 2; // ServerFlag(4) + Command + Language(2)
             int packetLength = 1 + 1 + commandLength + 2 + 2; // Protocol(1) + CmdLen(1) + Content + Serial(2) + CRC(2)
             
-            log.debug("Encoding GT06 command: '{}', ServerFlag: 0x{}, Language: {}, PacketLen: {}", 
-                     command, Integer.toHexString(serverFlag), useEnglish ? "EN" : "CN", packetLength);
+            log.debug("Encoding GT06 command: '{}', ServerFlag: 0x{}, Language: {}, PacketLen: {}", command, Integer.toHexString(serverFlag), useEnglish ? "EN" : "CN", packetLength);
             
             // Write packet following official GT06 structure
             out.writeBytes(START_BITS);                     // Start Bit: 0x7878
@@ -277,8 +276,7 @@ public class Gt06ProtocolEncoder extends MessageToByteEncoder<DeviceMessage> {
             out.writeShort(crc);                            // Error Check: CRC-ITU
             out.writeBytes(END_BITS);                       // Stop Bit: 0x0D0A
             
-            log.debug("GT06 packet encoded. Size: {} bytes, Serial: {}, CRC: 0x{}", 
-                     out.readableBytes(), currentSerial, Integer.toHexString(crc).toUpperCase());
+            log.debug("encodeOfficialGt06Command: GT06 packet encoded. Size: {} bytes, Serial: {}, CRC: 0x{}", out.readableBytes(), currentSerial, Integer.toHexString(crc).toUpperCase());
                      
         } catch (Exception e) {
             log.error("Failed to encode GT06 command '{}': {}", command, e.getMessage(), e);

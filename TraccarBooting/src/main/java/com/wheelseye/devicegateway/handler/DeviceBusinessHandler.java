@@ -1,5 +1,8 @@
 package com.wheelseye.devicegateway.handler;
 
+import com.wheelseye.devicegateway.dto.LocationDto;
+import com.wheelseye.devicegateway.messaging.EventPublisher;
+// import com.wheelseye.devicegateway.mappers.LocationMapper;
 import com.wheelseye.devicegateway.model.DeviceMessage;
 import com.wheelseye.devicegateway.service.ChannelManagerService;
 import com.wheelseye.devicegateway.service.CommandService;
@@ -10,10 +13,8 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.AttributeKey;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 
@@ -42,7 +43,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
 
     private final DeviceSessionService sessionService;
     private final CommandService commandService;
-
+    // private final EventPublisher eventPublisher;
+  
     @Autowired
     private ChannelManagerService channelManagerService;
 
@@ -144,6 +146,35 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
                         String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
                         String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
                         speed, course, latitude, longitude);
+
+        // try {
+        //     LocationDto location = new LocationDto(timestamp, gpsValid, latitude, longitude,
+        //             speed, course, accuracy, satellites);
+
+        //     if (location != null) {
+
+        //         logger.info("🌍 Location Data -------------------->");
+        //         logger.info("   🗓️ PktTime     : {}", location.timestamp());
+        //         logger.info(String.format("   📍 Lat/Lon     : %.6f° %s , %.6f° %s", Math.abs(location.latitude()),
+        //                 location.latitude() >= 0 ? "N" : "S", Math.abs(location.longitude()),
+        //                 location.longitude() >= 0 ? "E" : "W"));
+        //         logger.info("   🚗 Speed       : {} km/h      🧭 Heading : {}°", location.speed(), location.course());
+        //         logger.info("   🛰️ Satellites : {}", location.satellites());
+        //         // Accuracy (~ meters) → ❌ Not in GT06 packet (server usually estimates from
+        //         // satellite count).
+        //         logger.info("   🎯 Accuracy    : ~{} m", location.accuracy());
+        //         logger.info("   🔄 GPS Status  : {}", location.gpsValid() ? "Valid" : "Invalid");
+        //         // Fix Type (2D/3D) → Derived from satellites count, not raw in packet.
+        //         // logger.info(" 🔄 Fix Type : {}",
+        //         // location.satellites() >= 4 ? "3D Fix" : (location.satellites() >= 2 ? "2D
+        //         // Fix" : "No Fix"));
+        //         // logger.info(" #️⃣ Serial : {} 🏷️ Event : Normal Tracking (0x{})",
+        //         // frame.serialNumber(),
+        //         // String.format("%02X", frame.protocolNumber()));                        
+                        
+                // byte[] payload = LocationMapper.toProto(location).toByteArray();
+                // eventPublisher.publishLocation(imei, payload);
+
             } else {
                 log.warn("⚠️ Invalid location from {}: lat={}, lon={}", imei, latitude, longitude);
             }

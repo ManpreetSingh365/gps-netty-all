@@ -2,9 +2,12 @@ package com.wheelseye.devicegateway;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
+
+import com.wheelseye.devicegateway.config.KafkaTopicsProperties;
 
 /**
  * Main Application Class - Fixed with proper package scanning
@@ -14,12 +17,14 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.wheelseye.devicegateway.service",
         "com.wheelseye.devicegateway.repository",
         "com.wheelseye.devicegateway.handler",
+        "com.wheelseye.devicegateway.messaging",
         "com.wheelseye.devicegateway.protocol",
         "com.wheelseye.devicegateway.controller"
 })
 @EnableCaching
 @EnableAsync
 @EnableScheduling
+@EnableConfigurationProperties(KafkaTopicsProperties.class)
 public class DeviceGatewayServiceApplication {
 
     public static void main(String[] args) {

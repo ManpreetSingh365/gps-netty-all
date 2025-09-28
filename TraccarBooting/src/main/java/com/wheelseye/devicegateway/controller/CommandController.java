@@ -210,9 +210,7 @@ public class CommandController {
             @RequestParam String deviceId,
             @RequestParam(required = false) String password,
             @RequestParam(defaultValue = "1") int serverFlag,
-
             @Parameter(description = "ACC ON interval (5-60 seconds)") @RequestParam @Min(5) @Max(60) int accOnInterval,
-
             @Parameter(description = "ACC OFF interval (5-1800 seconds)") @RequestParam @Min(5) @Max(1800) int accOffInterval) {
 
         log.info("Timer configuration for device: {} - ACC ON: {}s, ACC OFF: {}s",
