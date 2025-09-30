@@ -28,8 +28,7 @@ public final class Gt06ProtocolTestSuite {
         static final String LOGIN = "78780D010123456789012345000123456789ABCD0D0A";
         
         // GPS location packet with real coordinates
-        static final String GPS_LOCATION = "78781F120B081D112E10CF027AC7EB0C4658490014" +
-                                          "8F01CC00287D001FB800038081FFFF0D0A";
+        static final String GPS_LOCATION = "78781F120B081D112E10CF027AC7EB0C46584900148F01CC00287D001FB800038081FFFF0D0A";
         
         // Heartbeat packet
         static final String HEARTBEAT = "787808134404030001001106FFFF0D0A";

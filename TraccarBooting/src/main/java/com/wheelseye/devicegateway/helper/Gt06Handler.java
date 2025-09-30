@@ -107,7 +107,7 @@
 //         logger.info("   📡 GSM Signal  : {} dBm   📶 Level : {}", deviceStatus.gsmSignal(),
 //                 deviceStatus.signalLevel());
 //         logger.info("   🛰️ GPS Fixed   : {}   🧭 Direction : {}°   🛰️ Satellites : {}",
-//                 deviceStatus.gpsFixed() ? "Yes" : "No", deviceStatus.direction(), deviceStatus.satellites());
+//                 deviceStatus.gpsValid() ? "Yes" : "No", deviceStatus.direction(), deviceStatus.satellites());
 //         logger.info("   🔋 Battery Lvl : {}   🔌 Voltage Lvl : {}", deviceStatus.batteryLevelText(),
 //                 deviceStatus.voltageLevelText());
 

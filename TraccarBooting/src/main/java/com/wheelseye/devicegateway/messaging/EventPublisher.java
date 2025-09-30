@@ -10,7 +10,7 @@ import com.wheelseye.devicegateway.config.KafkaTopicsProperties;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
-@Component
+@Component 
 @RequiredArgsConstructor
 public class EventPublisher {
 

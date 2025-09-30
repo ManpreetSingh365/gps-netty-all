@@ -1,8 +1,8 @@
 package com.wheelseye.devicegateway.handler;
 
 import com.wheelseye.devicegateway.dto.LocationDto;
+import com.wheelseye.devicegateway.mappers.LocationMapper;
 import com.wheelseye.devicegateway.messaging.EventPublisher;
-// import com.wheelseye.devicegateway.mappers.LocationMapper;
 import com.wheelseye.devicegateway.model.DeviceMessage;
 import com.wheelseye.devicegateway.service.ChannelManagerService;
 import com.wheelseye.devicegateway.service.CommandService;
@@ -43,8 +43,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
 
     private final DeviceSessionService sessionService;
     private final CommandService commandService;
-    // private final EventPublisher eventPublisher;
-  
+    private final EventPublisher eventPublisher;
+
     @Autowired
     private ChannelManagerService channelManagerService;
 
@@ -134,6 +134,8 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
             var timestamp = message.getData("gpsTimestamp", Instant.class).orElse(Instant.now());
             var speed = message.speed().orElse(0);
             var course = message.course().orElse(0);
+            var gpsValid = message.gpsValid().orElse(false);
+            var satelliteCount = message.satelliteCount().orElse(0);
 
             if (latitude != null && longitude != null) {
                 // Update session position using the correct service method
@@ -141,39 +143,21 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
 
                 // Log GPS information with Google Maps link
                 log.info(
-                        "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
-                        imei,
-                        String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
-                        String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
-                        speed, course, latitude, longitude);
+                    "📍 Device {} -> 🕒 Time: {} | gpsValid: {} | 🌐  DMS(Lat, Lon): {}°{}, {}°{} | 🏎️ Speed: {} km/h | 🧭 Course: {}° | 📡 Satellites: {} | 🔗 https://www.google.com/maps?q={},{}",
+                    imei,
+                    timestamp,
+                    gpsValid ? "✅" : "❌",
+                    String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
+                    String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
+                    speed,
+                    course,
+                    satelliteCount,
+                    latitude, longitude
+                );
 
-        // try {
-        //     LocationDto location = new LocationDto(timestamp, gpsValid, latitude, longitude,
-        //             speed, course, accuracy, satellites);
-
-        //     if (location != null) {
-
-        //         logger.info("🌍 Location Data -------------------->");
-        //         logger.info("   🗓️ PktTime     : {}", location.timestamp());
-        //         logger.info(String.format("   📍 Lat/Lon     : %.6f° %s , %.6f° %s", Math.abs(location.latitude()),
-        //                 location.latitude() >= 0 ? "N" : "S", Math.abs(location.longitude()),
-        //                 location.longitude() >= 0 ? "E" : "W"));
-        //         logger.info("   🚗 Speed       : {} km/h      🧭 Heading : {}°", location.speed(), location.course());
-        //         logger.info("   🛰️ Satellites : {}", location.satellites());
-        //         // Accuracy (~ meters) → ❌ Not in GT06 packet (server usually estimates from
-        //         // satellite count).
-        //         logger.info("   🎯 Accuracy    : ~{} m", location.accuracy());
-        //         logger.info("   🔄 GPS Status  : {}", location.gpsValid() ? "Valid" : "Invalid");
-        //         // Fix Type (2D/3D) → Derived from satellites count, not raw in packet.
-        //         // logger.info(" 🔄 Fix Type : {}",
-        //         // location.satellites() >= 4 ? "3D Fix" : (location.satellites() >= 2 ? "2D
-        //         // Fix" : "No Fix"));
-        //         // logger.info(" #️⃣ Serial : {} 🏷️ Event : Normal Tracking (0x{})",
-        //         // frame.serialNumber(),
-        //         // String.format("%02X", frame.protocolNumber()));                        
-                        
-                // byte[] payload = LocationMapper.toProto(location).toByteArray();
-                // eventPublisher.publishLocation(imei, payload);
+                LocationDto location = new LocationDto(imei, timestamp, gpsValid, latitude, longitude, speed, course, satelliteCount);
+                byte[] payload = LocationMapper.toProto(location).toByteArray();
+                eventPublisher.publishLocation(imei, payload);
 
             } else {
                 log.warn("⚠️ Invalid location from {}: lat={}, lon={}", imei, latitude, longitude);
@@ -437,7 +421,7 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
 
                 // ADD THIS LINE: Unregister channel
                 channelManagerService.unregisterChannel(imei);
-            
+
             } catch (Exception e) {
                 log.error("❌ Error removing session: {}", e.getMessage(), e);
             }

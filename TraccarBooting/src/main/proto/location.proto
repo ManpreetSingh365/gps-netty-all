@@ -9,12 +9,12 @@ import "google/protobuf/timestamp.proto";
 
 // Location message
 message Location {
-  google.protobuf.Timestamp timestamp = 1;
-  bool gps_valid   = 2;
-  double latitude  = 3;
-  double longitude = 4;
-  double speed     = 5;
-  double course    = 6;
-  double accuracy  = 7;
-  int32 satellites = 8;
+  string imei       = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  bool gps_valid    = 3;
+  double latitude   = 4;
+  double longitude  = 5;
+  double speed      = 6;
+  double course     = 7;
+  int32 satellites  = 8;
 }

@@ -7,16 +7,17 @@ import java.time.Instant;
 
 public class LocationMapper {
 
+    /** Convert LocationDto to Protobuf Location */
     public static Location toProto(LocationDto dto) {
         if (dto == null) return null;
 
         Location.Builder builder = Location.newBuilder()
+                .setImei(dto.imei())
                 .setGpsValid(dto.gpsValid())
                 .setLatitude(dto.latitude())
                 .setLongitude(dto.longitude())
                 .setSpeed(dto.speed())
                 .setCourse(dto.course())
-                .setAccuracy(dto.accuracy())
                 .setSatellites(dto.satellites());
 
         Instant ts = dto.timestamp();
@@ -32,6 +33,7 @@ public class LocationMapper {
         return builder.build();
     }
 
+    /** Convert Protobuf Location to LocationDto */
     public static LocationDto fromProto(Location proto) {
         Instant timestamp = null;
         if (proto.hasTimestamp()) {
@@ -42,13 +44,13 @@ public class LocationMapper {
         }
 
         return new LocationDto(
+                proto.getImei(),
                 timestamp,
                 proto.getGpsValid(),
                 proto.getLatitude(),
                 proto.getLongitude(),
                 proto.getSpeed(),
                 proto.getCourse(),
-                proto.getAccuracy(),
                 proto.getSatellites()
         );
     }

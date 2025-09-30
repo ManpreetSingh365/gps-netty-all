@@ -44,6 +44,7 @@ public class DeviceMessage {
     public Optional<Integer> course() { return getData("course", Integer.class); }
     public Optional<Integer> satelliteCount() { return getData("satelliteCount", Integer.class); }
     public Optional<Boolean> gpsPositioned() { return getData("gpsPositioned", Boolean.class); }
+    public Optional<Boolean> gpsValid() { return getData("gpsValid", Boolean.class); }
 
     // Status data accessors  
     public Optional<Integer> voltageLevel() { return getData("voltageLevel", Integer.class); }

@@ -1,7 +1,9 @@
 package com.wheelseye.devicegateway.protocol.gt06;
 
+import com.wheelseye.devicegateway.dto.LocationDto;
 import com.wheelseye.devicegateway.model.DeviceMessage;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToMessageDecoder;
@@ -29,6 +31,8 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
 
     private static final AttributeKey<String> IMEI_ATTR = AttributeKey.valueOf("DEVICE_IMEI");
     private static final AttributeKey<Instant> LAST_SEEN_ATTR = AttributeKey.valueOf("LAST_SEEN");
+    private static final int MIN_FRAME_LENGTH = 10;
+    private static final int START_BYTES = 2;
 
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf frame, List<Object> out) {
@@ -46,23 +50,39 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
     }
 
     private DeviceMessage parseGT06Frame(ByteBuf frame, ChannelHandlerContext ctx) {
-        if (frame.readableBytes() < 10) {
-            log.debug("📦 Insufficient frame data: {} bytes", frame.readableBytes());
+        int readableBytes = frame.readableBytes();
+        if (readableBytes < MIN_FRAME_LENGTH) {
+            log.debug("📦 Insufficient frame data: {} bytes", readableBytes);
             return null;
         }
 
-        var originalIndex = frame.readerIndex();
+        // Log raw data at debug level to avoid flooding logs
+        log.debug(
+            "📥 RAW DATA RECEIVED | 🌐 From: {} | 📏 Length: {} bytes | 🗃️ Data: {}",
+            ctx.channel().remoteAddress(), // IP:port of device
+            readableBytes,     // length of ByteBuf
+            ByteBufUtil.hexDump(frame) // logs as hex string
+        );
+
+        int originalIndex = frame.readerIndex();
 
         try {
-            frame.skipBytes(2); // Skip start bits (0x78 0x78)
-            var packetLength = frame.readUnsignedByte();
-            var protocolNumber = frame.readUnsignedByte();
-            var data = new HashMap<String, Object>();
+            // Skip start bytes (0x78 0x78)
+            frame.skipBytes(START_BYTES);
+
+            int packetLength = frame.readUnsignedByte();
+            if (frame.readableBytes() < packetLength) {
+                log.warn("⚠️ Incomplete packet received: expected {} bytes, available {}", packetLength, frame.readableBytes());
+                return null;
+            }
+
+            int protocolNumber = frame.readUnsignedByte();
+            Map<String, Object> data = new HashMap<>();
 
             return switch (protocolNumber) {
                 case 0x01 -> parseLogin(frame, data, ctx);
                 case 0x12, 0x22 -> parseLocation(frame, data, ctx, "gps");
-                case 0x16, 0x26 -> parseLocation(frame, data, ctx, "alarm"); 
+                case 0x16, 0x26 -> parseLocation(frame, data, ctx, "alarm");
                 case 0x13 -> parseHeartbeat(frame, data, ctx);
                 case 0x15, 0x21 -> parseString(frame, data, ctx);
                 case 0x1A, 0x2A -> parseAddressRequest(frame, data, ctx);
@@ -70,12 +90,13 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
             };
 
         } catch (Exception e) {
-            log.error("❌ Error parsing GT06 frame: {}", e.getMessage(), e);
+            log.error("❌ Error parsing GT06 frame from {}: {}", ctx.channel().remoteAddress(), e.getMessage(), e);
             return null;
         } finally {
             frame.readerIndex(originalIndex);
         }
     }
+
 
     private DeviceMessage parseLogin(ByteBuf content, Map<String, Object> data, ChannelHandlerContext ctx) {
         if (content.readableBytes() < 8) return null;
@@ -132,7 +153,7 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
         var speedRaw = content.readUnsignedByte();
         var courseStatus = content.readUnsignedShort();
         var courseRaw = courseStatus & 0x3FF;
-        var gpsFixed = (courseStatus & 0x1000) != 0;
+        var gpsValid = (courseStatus & 0x1000) != 0;
 
         // Store with explicit types
         data.put("latitude", latitude);
@@ -141,23 +162,16 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
         data.put("course", Integer.valueOf(courseRaw));      // Explicit Integer boxing
         data.put("satelliteCount", Integer.valueOf(satelliteCount));
         data.put("gpsPositioned", gpsPositioned);
-        data.put("gpsFixed", gpsFixed);
-        data.put("altitude", 0.0);
+        data.put("gpsValid", gpsValid);
+
+        // gpsValid → GPS says “I have a proper lock with enough satellites” → location is valid and reliable | Use gpsValid for real tracking.
+        // gpsPositioned → GPS says “I see satellites, I think I have a location” → but it might be weak/inaccurate | Use gpsPositioned only to know GPS is trying but not yet stable.
 
         // Parse status info for alarm messages
         if ("alarm".equals(messageType) && content.readableBytes() >= 5) {
             parseStatusInfo(content, data);
         }
         
-        // log.info(
-        //     "📍 Device {} -> [ 🌐 {}°{} , {}°{} ] 🏎️ {} km/h 🧭 {}° 🔗 https://www.google.com/maps?q={},{}",
-        //     imei,
-        //     String.format("%.6f", Math.abs(latitude)), latitude >= 0 ? "N" : "S",
-        //     String.format("%.6f", Math.abs(longitude)), longitude >= 0 ? "E" : "W",
-        //     speedRaw, satelliteCount,
-        //     latitude, longitude
-        // );
-
         return DeviceMessage.builder()
                 .imei(imei)
                 .type(messageType)

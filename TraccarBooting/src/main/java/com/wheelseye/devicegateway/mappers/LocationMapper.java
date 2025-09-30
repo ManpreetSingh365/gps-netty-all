@@ -1,56 +1,56 @@
-// package com.wheelseye.devicegateway.mappers;
+package com.wheelseye.devicegateway.mappers;
 
-// import com.google.protobuf.Timestamp;
-// import com.wheelseye.devicegateway.dto.LocationDto;
-// import com.wheelseye.devicegateway.protobuf.Location;
+import com.google.protobuf.Timestamp;
+import com.wheelseye.devicegateway.dto.LocationDto;
+import com.wheelseye.devicegateway.protobuf.Location;
 
-// import java.time.Instant;
+import java.time.Instant;
 
-// public class LocationMapper {
+public class LocationMapper {
 
-//     public static Location toProto(LocationDto dto) {
-//         if (dto == null) return null;
+    /** Convert LocationDto to Protobuf Location */
+    public static Location toProto(LocationDto dto) {
+        if (dto == null)
+            return null;
 
-//         Location.Builder builder = Location.newBuilder()
-//                 .setGpsValid(dto.gpsValid())
-//                 .setLatitude(dto.latitude())
-//                 .setLongitude(dto.longitude())
-//                 .setSpeed(dto.speed())
-//                 .setCourse(dto.course())
-//                 .setAccuracy(dto.accuracy())
-//                 .setSatellites(dto.satellites());
+        Location.Builder builder = Location.newBuilder()
+                .setImei(dto.imei())
+                .setGpsValid(dto.gpsValid())
+                .setLatitude(dto.latitude())
+                .setLongitude(dto.longitude())
+                .setSpeed(dto.speed())
+                .setCourse(dto.course())
+                .setSatellites(dto.satellites());
 
-//         Instant ts = dto.timestamp();
-//         if (ts != null) {
-//             builder.setTimestamp(
-//                     Timestamp.newBuilder()
-//                             .setSeconds(ts.getEpochSecond())
-//                             .setNanos(ts.getNano())
-//                             .build()
-//             );
-//         }
+        Instant ts = dto.timestamp();
+        if (ts != null) {
+            builder.setTimestamp(
+                    Timestamp.newBuilder()
+                            .setSeconds(ts.getEpochSecond())
+                            .setNanos(ts.getNano())
+                            .build());
+        }
 
-//         return builder.build();
-//     }
+        return builder.build();
+    }
 
-//     public static LocationDto fromProto(Location proto) {
-//         Instant timestamp = null;
-//         if (proto.hasTimestamp()) {
-//             timestamp = Instant.ofEpochSecond(
-//                     proto.getTimestamp().getSeconds(),
-//                     proto.getTimestamp().getNanos()
-//             );
-//         }
+    /** Convert Protobuf Location to LocationDto */
+    public static LocationDto fromProto(Location proto) {
+        Instant timestamp = null;
+        if (proto.hasTimestamp()) {
+            timestamp = Instant.ofEpochSecond(
+                    proto.getTimestamp().getSeconds(),
+                    proto.getTimestamp().getNanos());
+        }
 
-//         return new LocationDto(
-//                 timestamp,
-//                 proto.getGpsValid(),
-//                 proto.getLatitude(),
-//                 proto.getLongitude(),
-//                 proto.getSpeed(),
-//                 proto.getCourse(),
-//                 proto.getAccuracy(),
-//                 proto.getSatellites()
-//         );
-//     }
-// }
+        return new LocationDto(
+                proto.getImei(),
+                timestamp,
+                proto.getGpsValid(),
+                proto.getLatitude(),
+                proto.getLongitude(),
+                proto.getSpeed(),
+                proto.getCourse(),
+                proto.getSatellites());
+    }
+}
