@@ -10,7 +10,7 @@ import com.wheelseye.devicegateway.config.KafkaTopicsProperties;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
-@Component 
+@Component
 @RequiredArgsConstructor
 public class EventPublisher {
 
@@ -18,20 +18,20 @@ public class EventPublisher {
     private final KafkaTopicsProperties topics;
 
     // Publish raw binary device location payload (e.g., GT06 tracker)
-    public void publishLocation(String key, byte[] payload) {
-        sendMessage(topics.deviceLocation(), key, payload);
+    public void publishLocation(int partition, String key, byte[] payload) {
+        sendMessage(topics.deviceLocation(), partition, key, payload);
     }
 
     // Publish raw binary device info payload
-    public void publishDeviceInfo(String key, byte[] payload) {
-        sendMessage(topics.deviceInfo(), key, payload);
+    public void publishDeviceInfo(int partition, String key, byte[] payload) {
+        sendMessage(topics.deviceInfo(), partition, key, payload);
     }
 
     // Centralized send method with proper logging using CompletableFuture
-    private void sendMessage(String topicName, String key, byte[] payload) {
+    private void sendMessage(String topicName, int partition, String key, byte[] payload) {
         try {
             // Create the producer record
-            ProducerRecord<String, byte[]> producerRecord = new ProducerRecord<>(topicName, key, payload);
+            ProducerRecord<String, byte[]> producerRecord = new ProducerRecord<>(topicName, partition, key, payload);
 
             // Send using CompletableFuture (Spring Kafka 3.x)
             CompletableFuture<SendResult<String, byte[]>> future = kafkaTemplate.send(producerRecord);
@@ -43,8 +43,8 @@ public class EventPublisher {
                     log.error("❌ Failed to publish event to topic={}, key={}", topicName, key, throwable);
                 } else {
                     // Handle success
-                    log.debug("✅ Published event to topic={}, key={}, partition={}, offset={}",
-                            topicName, key,
+                    log.debug("✅ Published event to topic={}, partition={}, key={}, partition={}, offset={}",
+                            topicName, partition, key,
                             result.getRecordMetadata().partition(),
                             result.getRecordMetadata().offset());
                 }
@@ -54,7 +54,6 @@ public class EventPublisher {
             log.error("❌ Exception while publishing event to topic={}, key={}", topicName, key, e);
         }
     }
-
 
     // Optional: Synchronous send method for critical operations
     public SendResult<String, byte[]> sendMessageSync(String topicName, String key, byte[] payload) {

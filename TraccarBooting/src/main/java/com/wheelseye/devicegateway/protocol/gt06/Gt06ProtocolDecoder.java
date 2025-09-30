@@ -166,7 +166,7 @@ public class Gt06ProtocolDecoder extends MessageToMessageDecoder<ByteBuf> {
 
         // gpsValid → GPS says “I have a proper lock with enough satellites” → location is valid and reliable | Use gpsValid for real tracking.
         // gpsPositioned → GPS says “I see satellites, I think I have a location” → but it might be weak/inaccurate | Use gpsPositioned only to know GPS is trying but not yet stable.
-
+        
         // Parse status info for alarm messages
         if ("alarm".equals(messageType) && content.readableBytes() >= 5) {
             parseStatusInfo(content, data);

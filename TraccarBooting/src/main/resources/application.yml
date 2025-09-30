@@ -91,8 +91,14 @@ device-gateway:
 
   kafka:
     topics:
-      device-location: device.location
-      device-info: device.info
+      bootstrapServers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+      consumerGroupId: device-gateway-group
+      deviceLocation: device.location
+      deviceInfo: device.info
+      deviceLocationPartitions: 50
+      deviceLocationReplication: 3
+      deviceInfoPartitions: 3
+      deviceInfoReplication: 1
 
   session:
     cleanup-interval: ${DEVICE_GATEWAY_SESSION_CLEANUP_INTERVAL:300000}  # FIXED: 5 minutes instead of 60s

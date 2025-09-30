@@ -8,25 +8,31 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
     consumer:
-      group-id: location-service-group
+      group-id: ${KAFKA_CONSUMER_GROUP_ID:location-service-group}
       auto-offset-reset: latest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
       properties:
         allow.auto.create.topics: false
+        group.instance.id: ${HOSTNAME:${spring.application.name}}-${spring.application.index:0}
     listener:
       ack-mode: MANUAL_IMMEDIATE
 
 location:
   kafka:
     topics:
+      bootstrapServers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+      consumerGroupId: location-service-group
       deviceLocation: device.location
       deviceInfo: device.info
+
+
 
 logging:
   level:
     com.aman.location: INFO
     org.springframework.kafka: INFO
+    org.apache.kafka.clients.consumer.internals.ConsumerCoordinator: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
 

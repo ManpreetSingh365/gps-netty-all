@@ -9,13 +9,13 @@ let mapInstance: L.Map | null = null;
 
 // TypeScript interface for location data
 interface Location {
+  imei: string;
+  timestamp: string;
+  gpsValid: boolean;
   latitude: number;
   longitude: number;
-  altitude: number;
   speed: number;
   course: number;
-  valid: boolean;
-  timestamp: string;
   satellites: number;
 }
 
@@ -173,7 +173,7 @@ const LiveMap: React.FC = () => {
           console.log("Received SSE data:", event.data);
           const parsed = JSON.parse(event.data) as Location;
 
-          if (parsed && parsed.valid && parsed.latitude && parsed.longitude) {
+          if (parsed && parsed.gpsValid && parsed.latitude && parsed.longitude) {
             // update current location
             setCurrentLocation((prev) => {
               // optional: avoid duplicate identical updates (tiny optimization)
@@ -275,6 +275,9 @@ const LiveMap: React.FC = () => {
           <h3 className="font-bold text-sm mb-2">Current Location</h3>
           <div className="text-xs space-y-1">
             <p>
+              <strong>IMEI:</strong> {currentLocation.imei}
+            </p>
+            <p>
               <strong>Lat:</strong> {currentLocation.latitude.toFixed(6)}
             </p>
             <p>
@@ -335,13 +338,13 @@ const LiveMap: React.FC = () => {
             onClick={() => {
               console.log("Testing with sample data...");
               const sampleData: Location = {
+                imei: "123456789012345",
+                timestamp: new Date().toISOString(),
+                gpsValid: true,
                 latitude: 29.6608,
                 longitude: 74.41905333333334,
-                altitude: 0.0,
                 speed: 45.0,
                 course: 29,
-                valid: true,
-                timestamp: new Date().toISOString(),
                 satellites: 207,
               };
               setCurrentLocation(sampleData);

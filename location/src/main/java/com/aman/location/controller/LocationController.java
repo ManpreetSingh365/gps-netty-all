@@ -17,7 +17,6 @@ public class LocationController {
 
     @GetMapping(value = "/locations/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<LocationDto>> streamLocations() {
-        return Flux.<LocationDto>create(eventConsumer::subscribe)
-                .map(location -> ServerSentEvent.<LocationDto>builder(location).build());
+        return Flux.<LocationDto>create(eventConsumer::subscribe).map(location -> ServerSentEvent.<LocationDto>builder(location).build());
     }
 }

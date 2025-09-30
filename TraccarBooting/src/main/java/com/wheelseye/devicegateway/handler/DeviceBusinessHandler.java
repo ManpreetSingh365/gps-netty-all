@@ -1,5 +1,7 @@
 package com.wheelseye.devicegateway.handler;
 
+import com.google.common.hash.Hashing;
+import com.wheelseye.devicegateway.config.KafkaTopicsProperties;
 import com.wheelseye.devicegateway.dto.LocationDto;
 import com.wheelseye.devicegateway.mappers.LocationMapper;
 import com.wheelseye.devicegateway.messaging.EventPublisher;
@@ -13,8 +15,12 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.util.AttributeKey;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 
@@ -44,6 +50,7 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
     private final DeviceSessionService sessionService;
     private final CommandService commandService;
     private final EventPublisher eventPublisher;
+    private final KafkaTopicsProperties kafkaTopicsProperties;
 
     @Autowired
     private ChannelManagerService channelManagerService;
@@ -156,8 +163,10 @@ public class DeviceBusinessHandler extends SimpleChannelInboundHandler<DeviceMes
                 );
 
                 LocationDto location = new LocationDto(imei, timestamp, gpsValid, latitude, longitude, speed, course, satelliteCount);
+
+                int partition =    kafkaTopicsProperties.getLocationPartition(imei);
                 byte[] payload = LocationMapper.toProto(location).toByteArray();
-                eventPublisher.publishLocation(imei, payload);
+                eventPublisher.publishLocation(partition, imei, payload);
 
             } else {
                 log.warn("⚠️ Invalid location from {}: lat={}, lon={}", imei, latitude, longitude);

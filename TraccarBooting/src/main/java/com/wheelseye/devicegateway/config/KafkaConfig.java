@@ -29,35 +29,43 @@ import java.util.Map;
 @EnableKafka
 public class KafkaConfig {
 
-    @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
-    private String bootstrapServers;
+    private final KafkaTopicsProperties topics;
 
-    @Value("${spring.kafka.consumer.group-id:device-gateway-service}")
-    private String consumerGroupId;
+    public KafkaConfig(KafkaTopicsProperties topics) { 
+        this.topics = topics;
+    }
 
-    // ---------------- Kafka Admin & Topics ----------------
+    // ---------------- Kafka Admin ----------------
     @Bean
     public KafkaAdmin kafkaAdmin() {
         Map<String, Object> configs = new HashMap<>();
-        configs.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configs.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, topics.bootstrapServers());
         return new KafkaAdmin(configs);
     }
 
     @Bean
     public NewTopic deviceLocationTopic() {
-        return new NewTopic("device.location", 3, (short) 1);
+        return new NewTopic(
+                topics.deviceLocation(),
+                topics.deviceLocationPartitions(),
+                topics.deviceLocationReplication()
+        );
     }
 
     @Bean
     public NewTopic deviceInfoTopic() {
-        return new NewTopic("device.info", 3, (short) 1);
+        return new NewTopic(
+                topics.deviceInfo(),
+                topics.deviceInfoPartitions(),
+                topics.deviceInfoReplication()
+        );
     }
-
+    
     // ---------------- Producer ----------------
     @Bean
     public ProducerFactory<String, byte[]> byteArrayProducerFactory() {
         Map<String, Object> configProps = new HashMap<>();
-        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, topics.bootstrapServers());
         configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, org.apache.kafka.common.serialization.ByteArraySerializer.class);
         configProps.put(ProducerConfig.ACKS_CONFIG, "all");
@@ -76,8 +84,8 @@ public class KafkaConfig {
     @Bean
     public ConsumerFactory<String, Object> consumerFactory() {
         Map<String, Object> configProps = new HashMap<>();
-        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroupId);
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, topics.bootstrapServers());
+        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, topics.consumerGroupId());
         configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class);
         configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
